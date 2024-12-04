@@ -25,35 +25,54 @@
 char diskfile_path[PATH_MAX];
 
 // Declare your in-memory data structures here
+bitmap_t inode_bitmap; 
+bitmap_t data_bitmap;
+struct superblock sb;
 
 /* 
  * Get available inode number from bitmap
  */
 int get_avail_ino() {
+    if (bio_read(sb.i_bitmap_blk, inode_bitmap) < 0) {
+        return -1;
+    }
 
-	// Step 1: Read inode bitmap from disk
-	
-	// Step 2: Traverse inode bitmap to find an available slot
+    for (int i = 0; i < MAX_INUM; i++) {
+        if (!(inode_bitmap[i / 8] & (1 << (i % 8)))) {
+            inode_bitmap[i / 8] |= (1 << (i % 8));
 
-	// Step 3: Update inode bitmap and write to disk 
+            if (bio_write(sb.i_bitmap_blk, inode_bitmap) < 0) {
+                return -1;
+            }
 
-	return 0;
+            return i;
+        }
+    }
+
+    fprintf(stderr, "Error: No available inodes in the bitmap\n");
+    return -1;
 }
 
 /* 
  * Get available data block number from bitmap
  */
 int get_avail_blkno() {
+    // Step 1: Read data block bitmap from disk using bio_read
+    if (bio_read(sb.d_bitmap_blk, data_bitmap) < 0) {
+        return -1;
+    }
 
-	// Step 1: Read data block bitmap from disk
-	
-	// Step 2: Traverse data block bitmap to find an available slot
-
-	// Step 3: Update data block bitmap and write to disk 
-
-	return 0;
+    for (int i = 0; i < MAX_DNUM; i++) {
+        if (!(data_bitmap[i / 8] & (1 << (i % 8)))) { 
+            data_bitmap[i / 8] |= (1 << (i % 8)); 
+            if (bio_write(sb.d_bitmap_blk, data_bitmap) < 0) {
+                return -1;
+            }
+            return i;
+        }
+    }
+    return -1;
 }
-
 /* 
  * inode operations
  */
@@ -368,6 +387,8 @@ static struct fuse_operations rufs_ope = {
 
 int main(int argc, char *argv[]) {
 	int fuse_stat;
+	inode_bitmap = calloc((MAX_INUM + 7) / 8, sizeof(unsigned char));
+    data_bitmap = calloc((MAX_DNUM + 7) / 8, sizeof(unsigned char));
 
 	getcwd(diskfile_path, PATH_MAX);
 	strcat(diskfile_path, "/DISKFILE");
