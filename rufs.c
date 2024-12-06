@@ -121,43 +121,104 @@ int writei(uint16_t ino, struct inode *inode) {
  * directory operations
  */
 int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *dirent) {
+    struct inode dir_inode;
+    
+    if (readi(ino, &dir_inode) < 0) {
+        return -1; 
+    }
 
-  // Step 1: Call readi() to get the inode using ino (inode number of current directory)
+    for (int i = 0; i < 16 && dir_inode.direct_ptr[i] != 0; i++) {
+        char buf[BLOCK_SIZE];
+        if (bio_read(dir_inode.direct_ptr[i], buf) < 0) {
+            return -1; 
+        }
 
-  // Step 2: Get data block of current directory from inode
+        struct dirent *entry = (struct dirent *)buf;
+        for (int j = 0; j < BLOCK_SIZE / sizeof(struct dirent); j++) {
+            if (entry[j].valid && strncmp(entry[j].name, fname, name_len) == 0) {
+                memcpy(dirent, &entry[j], sizeof(struct dirent));
+                return 0; 
+            }
+        }
+    }
 
-  // Step 3: Read directory's data block and check each directory entry.
-  //If the name matches, then copy directory entry to dirent structure
-
-	return 0;
+    return -1;
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
+    struct dirent new_dirent = {0};
+    new_dirent.ino = f_ino;
+    new_dirent.valid = 1;
+    strncpy(new_dirent.name, fname, name_len);
+    new_dirent.len = name_len;
 
-	// Step 1: Read dir_inode's data block and check each directory entry of dir_inode
-	
-	// Step 2: Check if fname (directory name) is already used in other entries
+    for (int i = 0; i < 16; i++) {
+        char buf[BLOCK_SIZE];
 
-	// Step 3: Add directory entry in dir_inode's data block and write to disk
+        if (dir_inode.direct_ptr[i] == 0) {
+            int new_block = get_avail_blkno();
+            if (new_block < 0) {
+                return -1;
+            }
+            dir_inode.direct_ptr[i] = new_block;
+            dir_inode.size += BLOCK_SIZE;
+            memset(buf, 0, BLOCK_SIZE);
+            bio_write(new_block, buf);
+        }
 
-	// Allocate a new data block for this directory if it does not exist
+        if (bio_read(dir_inode.direct_ptr[i], buf) < 0) {
+            return -1;
+        }
 
-	// Update directory inode
+        struct dirent *entry = (struct dirent *)buf;
+        for (int j = 0; j < BLOCK_SIZE / sizeof(struct dirent); j++) {
+            if (!entry[j].valid) {
+                memcpy(&entry[j], &new_dirent, sizeof(struct dirent));
+                bio_write(dir_inode.direct_ptr[i], buf);
+                writei(dir_inode.ino, &dir_inode);
+                return 0; 
+            }
 
-	// Write directory entry
+            if (entry[j].valid && strncmp(entry[j].name, fname, name_len) == 0) {
+                return -1;
+            }
+        }
+    }
 
-	return 0;
+    return -ENOSPC;
 }
-
 /* 
  * namei operation
  */
 int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
-	
-	// Step 1: Resolve the path name, walk through path, and finally, find its inode.
-	// Note: You could either implement it in a iterative way or recursive way
+    if (strcmp(path, "/") == 0) {
+        return readi(ino, inode);
+    }
 
-	return 0;
+    char path_copy[PATH_MAX];
+    strncpy(path_copy, path, PATH_MAX);
+
+    char *token = strtok(path_copy, "/");
+    struct inode current_inode;
+    if (readi(ino, &current_inode) < 0) {
+        return -1;
+    }
+
+    while (token != NULL) {
+        struct dirent dir_entry;
+        if (dir_find(current_inode.ino, token, strlen(token), &dir_entry) < 0) {
+            return -1;
+        }
+
+        if (readi(dir_entry.ino, &current_inode) < 0) {
+            return -1; 
+        }
+
+        token = strtok(NULL, "/");
+    }
+
+    memcpy(inode, &current_inode, sizeof(struct inode));
+    return 0;
 }
 
 /* 
@@ -253,19 +314,7 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 }
 
 static int rufs_rmdir(const char *path) {
-
-	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
-
-	// Step 2: Call get_node_by_path() to get inode of target directory
-
-	// Step 3: Clear data block bitmap of target directory
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target directory in its parent directory
-
+	//USELESS
 	return 0;
 }
 
@@ -327,19 +376,7 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 }
 
 static int rufs_unlink(const char *path) {
-
-	// Step 1: Use dirname() and basename() to separate parent directory path and target file name
-
-	// Step 2: Call get_node_by_path() to get inode of target file
-
-	// Step 3: Clear data block bitmap of target file
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target file in its parent directory
-
+	//USELESS
 	return 0;
 }
 
