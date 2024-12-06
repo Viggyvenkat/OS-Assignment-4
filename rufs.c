@@ -31,8 +31,18 @@ struct superblock sb;
  * Get available inode number from bitmap
  */
 int get_avail_ino() {
-    char buf[BLOCK_SIZE];
+
+    //Inode 0 is reserved, so bitmap should reflect it as used 
+
+	// Step 1: Read inode bitmap from disk
+	
+	// Step 2: Traverse inode bitmap to find an available slot
+
+	// Step 3: Update inode bitmap and write to disk 
+
+	char buf[BLOCK_SIZE];
     if (bio_read(sb.i_bitmap_blk, buf) < 0) {
+        fprintf(stderr, "Error: Failed to read inode bitmap from block %d\n", sb.i_bitmap_blk);
         return -1;
     }
 
@@ -41,9 +51,11 @@ int get_avail_ino() {
             set_bitmap((bitmap_t)buf, i);
 
             if (bio_write(sb.i_bitmap_blk, buf) < 0) {
+                fprintf(stderr, "Error: Failed to write updated inode bitmap to block %d\n", sb.i_bitmap_blk);
                 return -1;
             }
 
+            fprintf(stderr, "get_avail_ino: Found available inode %d\n", i);
             return i; 
         }
     }
@@ -55,7 +67,14 @@ int get_avail_ino() {
  * Get available data block number from bitmap
  */
 int get_avail_blkno() {
-    char buf[BLOCK_SIZE];
+
+	// Step 1: Read data block bitmap from disk
+	
+	// Step 2: Traverse data block bitmap to find an available slot
+
+	// Step 3: Update data block bitmap and write to disk 
+
+	char buf[BLOCK_SIZE];
     if (bio_read(sb.d_bitmap_blk, buf) < 0) {
         return -1; 
     }
@@ -74,11 +93,13 @@ int get_avail_blkno() {
 
     return -1;
 }
+
 /* 
  * inode operations
  */
 int readi(uint16_t ino, struct inode *inode) {
     if (ino >= sb.max_inum) {
+        fprintf(stderr, "Error: Inode number %d is out of bounds (max: %d)\n", ino, sb.max_inum);
         return -1;
     }
 
@@ -87,16 +108,22 @@ int readi(uint16_t ino, struct inode *inode) {
 
     char buf[BLOCK_SIZE];
     if (bio_read(blk_num, buf) < 0) {
+        fprintf(stderr, "Error: Failed to read block %d for inode %d\n", blk_num, ino);
         return -1;
     }
 
     memcpy(inode, buf + offset, sizeof(struct inode));
 
-    return 0; 
+    // Debugging output
+    fprintf(stderr, "readi: Reading inode %d from block %d, offset %d\n", ino, blk_num, offset);
+    fprintf(stderr, "readi: Inode Values: Valid=%d, Type=0x%x, Link=%d\n", inode->valid, inode->type, inode->link);
+
+    return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
     if (ino >= sb.max_inum) {
+        fprintf(stderr, "Error: Inode number %d is out of bounds (max: %d)\n", ino, sb.max_inum);
         return -1;
     }
 
@@ -105,23 +132,38 @@ int writei(uint16_t ino, struct inode *inode) {
 
     char buf[BLOCK_SIZE];
     if (bio_read(blk_num, buf) < 0) {
+        fprintf(stderr, "Error: Failed to read block %d for inode %d\n", blk_num, ino);
         return -1; 
     }
 
     memcpy(buf + offset, inode, sizeof(struct inode));
 
+    // Debugging output
+    fprintf(stderr, "writei: Writing inode %d to block %d, offset %d\n", ino, blk_num, offset);
+    fprintf(stderr, "writei: Inode Values: Valid=%d, Type=0x%x, Link=%d\n", inode->valid, inode->type, inode->link);
+
     if (bio_write(blk_num, buf) < 0) {
+        fprintf(stderr, "Error: Failed to write block %d for inode %d\n", blk_num, ino);
         return -1; 
     }
 
     return 0; 
 }
 
+
 /* 
  * directory operations
  */
 int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *dirent) {
-    struct inode dir_inode;
+
+  // Step 1: Call readi() to get the inode using ino (inode number of current directory)
+
+  // Step 2: Get data block of current directory from inode
+
+  // Step 3: Read directory's data block and check each directory entry.
+  //If the name matches, then copy directory entry to dirent structure
+    
+	struct inode dir_inode;
     
     if (readi(ino, &dir_inode) < 0) {
         return -1; 
@@ -146,7 +188,20 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
-    struct dirent new_dirent = {0};
+
+	// Step 1: Read dir_inode's data block and check each directory entry of dir_inode
+	
+	// Step 2: Check if fname (directory name) is already used in other entries
+
+	// Step 3: Add directory entry in dir_inode's data block and write to disk
+
+	// Allocate a new data block for this directory if it does not exist
+
+	// Update directory inode
+
+	// Write directory entry
+
+	struct dirent new_dirent = {0};
     new_dirent.ino = f_ino;
     new_dirent.valid = 1;
     strncpy(new_dirent.name, fname, name_len);
@@ -187,11 +242,27 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 
     return -ENOSPC;
 }
+
+int dir_remove(struct inode dir_inode, const char *fname, size_t name_len) {
+
+	// Step 1: Read dir_inode's data block and checks each directory entry of dir_inode
+	
+	// Step 2: Check if fname exist
+
+	// Step 3: If exist, then remove it from dir_inode's data block and write to disk
+
+	return 0;
+}
+
 /* 
  * namei operation
  */
 int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
-    if (strcmp(path, "/") == 0) {
+	
+	// Step 1: Resolve the path name, walk through path, and finally, find its inode.
+	// Note: You could either implement it in a iterative way or recursive way
+
+	if (strcmp(path, "/") == 0) {
         return readi(ino, inode);
     }
 
@@ -227,16 +298,46 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
 int rufs_mkfs() {
 
 	// Call dev_init() to initialize (Create) Diskfile
+    dev_init(diskfile_path);
 
 	// write superblock information
+    sb.magic_num = MAGIC_NUM;
+    sb.max_inum = MAX_INUM;
+    sb.max_dnum = MAX_DNUM;
+    sb.i_bitmap_blk = 1;
+    sb.d_bitmap_blk = 2;
+    sb.i_start_blk = 3;
+    sb.d_start_blk = sb.i_start_blk + (MAX_INUM * sizeof(struct inode)) / BLOCK_SIZE;
+
+    char buffer[BLOCK_SIZE] = {0};
+    memcpy(buffer, &sb, sizeof(sb));
+    bio_write(0, buffer); // Write superblock to block 0
 
 	// initialize inode bitmap
+    // initialize data block bitmap
+    bitmap_t inode_bitmap = calloc(1, BLOCK_SIZE);
+    bitmap_t data_bitmap = calloc(1, BLOCK_SIZE);
+    bio_write(sb.i_bitmap_blk, inode_bitmap); // Write empty inode bitmap
+    bio_write(sb.d_bitmap_blk, data_bitmap); // Write empty data block bitmap
 
-	// initialize data block bitmap
+    //initializing root directory inode
+    struct inode root_inode;
+    root_inode.ino = 0;
+    root_inode.valid = 1;
+    root_inode.size = 0;
+    root_inode.type = S_IFDIR;
+    root_inode.link = 2; // "." and ".."
+    memset(root_inode.direct_ptr, 0, sizeof(root_inode.direct_ptr));
+    memset(root_inode.indirect_ptr, 0, sizeof(root_inode.indirect_ptr));
 
-	// update bitmap information for root directory
+    //mark inode 0
+    set_bitmap(inode_bitmap, 0);
+    bio_write(sb.i_bitmap_blk, inode_bitmap); // Update inode bitmap on disk
+    writei(0, &root_inode); // Write root inode to disk
 
-	// update inode for root directory
+    free(inode_bitmap);
+    free(data_bitmap);
+
 
 	return 0;
 }
@@ -252,14 +353,42 @@ static void *rufs_init(struct fuse_conn_info *conn) {
   // Step 1b: If disk file is found, just initialize in-memory data structures
   // and read superblock from disk
 
-	return NULL;
+    // Attempt to open the disk file
+    if (dev_open(diskfile_path) < 0) {
+        fprintf(stderr, "Disk file not found. Creating a new file system...\n");
+        if (rufs_mkfs() < 0) {
+            fprintf(stderr, "Error: Failed to create a new file system\n");
+            return NULL;
+        }
+    } else {
+        fprintf(stderr, "Disk file found. Initializing file system...\n");
+
+        // Read the superblock from disk
+        char buffer[BLOCK_SIZE];
+        if (bio_read(0, buffer) < 0) {
+            fprintf(stderr, "Error: Failed to read superblock\n");
+            return NULL;
+        }
+        memcpy(&sb, buffer, sizeof(struct superblock));
+
+        // Debugging output
+        fprintf(stderr, "rufs_init: Superblock loaded:\n");
+    }
+
+
+    return NULL;
 }
 
 static void rufs_destroy(void *userdata) {
 
+     fprintf(stderr, "Destroying the file system and cleaning up resources...\n");
 	// Step 1: De-allocate in-memory data structures
 
 	// Step 2: Close diskfile
+
+    dev_close(); 
+    fprintf(stderr, "Disk file closed successfully.\n");
+
 
 }
 
@@ -314,7 +443,19 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 }
 
 static int rufs_rmdir(const char *path) {
-	//USELESS
+
+	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
+
+	// Step 2: Call get_node_by_path() to get inode of target directory
+
+	// Step 3: Clear data block bitmap of target directory
+
+	// Step 4: Clear inode bitmap and its data block
+
+	// Step 5: Call get_node_by_path() to get inode of parent directory
+
+	// Step 6: Call dir_remove() to remove directory entry of target directory in its parent directory
+
 	return 0;
 }
 
@@ -376,7 +517,19 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 }
 
 static int rufs_unlink(const char *path) {
-	//USELESS
+
+	// Step 1: Use dirname() and basename() to separate parent directory path and target file name
+
+	// Step 2: Call get_node_by_path() to get inode of target file
+
+	// Step 3: Clear data block bitmap of target file
+
+	// Step 4: Clear inode bitmap and its data block
+
+	// Step 5: Call get_node_by_path() to get inode of parent directory
+
+	// Step 6: Call dir_remove() to remove directory entry of target file in its parent directory
+
 	return 0;
 }
 
@@ -429,14 +582,36 @@ static struct fuse_operations rufs_ope = {
 };
 
 
-int main(int argc, char *argv[]) {
-	int fuse_stat;
 
-	getcwd(diskfile_path, PATH_MAX);
-	strcat(diskfile_path, "/DISKFILE");
-
-	fuse_stat = fuse_main(argc, argv, &rufs_ope, NULL);
-
-	return fuse_stat;
+//testing
+//keep this in cause some tests use it
+void clear_bitmap(bitmap_t bitmap, int index) {
+    bitmap[index / 8] &= ~(1 << (index % 8));
 }
 
+// Conditional Main Function
+// when testing, run:
+// make CFLAGS="-D_FILE_OFFSET_BITS=64 -DTEST_MODE"
+//./rufs
+#ifdef TEST_MODE
+int main() {
+    //test_rufs_mkfs();
+    //test_rufs_init();
+    //test_rufs_destroy();
+    //test_get_avail_ino();
+    //test_get_avail_ino_advanced();
+    return 0;
+}
+#else
+//when running benchmarks, just do make 
+int main(int argc, char *argv[]) {
+    int fuse_stat;
+
+    getcwd(diskfile_path, PATH_MAX);
+    strcat(diskfile_path, "/DISKFILE");
+
+    fuse_stat = fuse_main(argc, argv, &rufs_ope, NULL);
+
+    return fuse_stat;
+}
+#endif

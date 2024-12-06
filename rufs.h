@@ -46,21 +46,26 @@ struct dirent {
 	uint16_t len;					/* length of name */
 };
 
+extern char diskfile_path[PATH_MAX];
+//declarations
+int rufs_mkfs();
 
 /*
- * bitmap operations
+ * bitmap operations 
  */
+
+ //CHANGE BACK TO VOID
 typedef unsigned char* bitmap_t;
 
-void set_bitmap(bitmap_t b, int i) {
+static inline void set_bitmap(bitmap_t b, int i) {
     b[i / 8] |= 1 << (i & 7);
 }
 
-void unset_bitmap(bitmap_t b, int i) {
+static inline void unset_bitmap(bitmap_t b, int i) {
     b[i / 8] &= ~(1 << (i & 7));
 }
 
-uint8_t get_bitmap(bitmap_t b, int i) {
+static inline uint8_t get_bitmap(bitmap_t b, int i) {
     return b[i / 8] & (1 << (i & 7)) ? 1 : 0;
 }
 

@@ -10,6 +10,11 @@ OBJ=rufs.o block.o
 rufs: $(OBJ)
 	$(CC) $(OBJ) $(LDFLAGS) -o rufs
 
+# Build test executable
+test: CFLAGS += -DTEST_MODE
+test: rufs.o block.o
+	$(CC) $(CFLAGS) -o test 
+	
 .PHONY: clean
 clean:
 	rm -f *.o rufs
