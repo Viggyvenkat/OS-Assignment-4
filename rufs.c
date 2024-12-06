@@ -117,7 +117,6 @@ int writei(uint16_t ino, struct inode *inode) {
     return 0; 
 }
 
-
 /* 
  * directory operations
  */
@@ -146,17 +145,6 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 	// Update directory inode
 
 	// Write directory entry
-
-	return 0;
-}
-
-int dir_remove(struct inode dir_inode, const char *fname, size_t name_len) {
-
-	// Step 1: Read dir_inode's data block and checks each directory entry of dir_inode
-	
-	// Step 2: Check if fname exist
-
-	// Step 3: If exist, then remove it from dir_inode's data block and write to disk
 
 	return 0;
 }
@@ -264,23 +252,6 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 	return 0;
 }
 
-static int rufs_rmdir(const char *path) {
-
-	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
-
-	// Step 2: Call get_node_by_path() to get inode of target directory
-
-	// Step 3: Clear data block bitmap of target directory
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target directory in its parent directory
-
-	return 0;
-}
-
 static int rufs_releasedir(const char *path, struct fuse_file_info *fi) {
 	// For this project, you don't need to fill this function
 	// But DO NOT DELETE IT!
@@ -336,23 +307,6 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 
 	// Note: this function should return the amount of bytes you write to disk
 	return size;
-}
-
-static int rufs_unlink(const char *path) {
-
-	// Step 1: Use dirname() and basename() to separate parent directory path and target file name
-
-	// Step 2: Call get_node_by_path() to get inode of target file
-
-	// Step 3: Clear data block bitmap of target file
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target file in its parent directory
-
-	return 0;
 }
 
 static int rufs_truncate(const char *path, off_t size) {
