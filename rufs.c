@@ -25,77 +25,96 @@
 char diskfile_path[PATH_MAX];
 
 // Declare your in-memory data structures here
-bitmap_t inode_bitmap; 
-bitmap_t data_bitmap;
 struct superblock sb;
 
 /* 
  * Get available inode number from bitmap
  */
 int get_avail_ino() {
-    if (bio_read(sb.i_bitmap_blk, inode_bitmap) < 0) {
+    char buf[BLOCK_SIZE];
+    if (bio_read(sb.i_bitmap_blk, buf) < 0) {
         return -1;
     }
 
     for (int i = 0; i < MAX_INUM; i++) {
-        if (!(inode_bitmap[i / 8] & (1 << (i % 8)))) {
-            inode_bitmap[i / 8] |= (1 << (i % 8));
+        if (!get_bitmap((bitmap_t)buf, i)) { 
+            set_bitmap((bitmap_t)buf, i);
 
-            if (bio_write(sb.i_bitmap_blk, inode_bitmap) < 0) {
+            if (bio_write(sb.i_bitmap_blk, buf) < 0) {
                 return -1;
             }
 
-            return i;
+            return i; 
         }
     }
 
-    fprintf(stderr, "Error: No available inodes in the bitmap\n");
-    return -1;
+    return -1; 
 }
 
 /* 
  * Get available data block number from bitmap
  */
 int get_avail_blkno() {
-    // Step 1: Read data block bitmap from disk using bio_read
-    if (bio_read(sb.d_bitmap_blk, data_bitmap) < 0) {
-        return -1;
+    char buf[BLOCK_SIZE];
+    if (bio_read(sb.d_bitmap_blk, buf) < 0) {
+        return -1; 
     }
 
     for (int i = 0; i < MAX_DNUM; i++) {
-        if (!(data_bitmap[i / 8] & (1 << (i % 8)))) { 
-            data_bitmap[i / 8] |= (1 << (i % 8)); 
-            if (bio_write(sb.d_bitmap_blk, data_bitmap) < 0) {
+        if (!get_bitmap((bitmap_t)buf, i)) {
+            set_bitmap((bitmap_t)buf, i);
+
+            if (bio_write(sb.d_bitmap_blk, buf) < 0) {
                 return -1;
             }
+
             return i;
         }
     }
+
     return -1;
 }
 /* 
  * inode operations
  */
 int readi(uint16_t ino, struct inode *inode) {
+    if (ino >= sb.max_inum) {
+        return -1;
+    }
 
-  // Step 1: Get the inode's on-disk block number
+    uint32_t blk_num = sb.i_start_blk + (ino * sizeof(struct inode)) / BLOCK_SIZE;
+    uint32_t offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 
-  // Step 2: Get offset of the inode in the inode on-disk block
+    char buf[BLOCK_SIZE];
+    if (bio_read(blk_num, buf) < 0) {
+        return -1;
+    }
 
-  // Step 3: Read the block from disk and then copy into inode structure
+    memcpy(inode, buf + offset, sizeof(struct inode));
 
-	return 0;
+    return 0; 
 }
 
 int writei(uint16_t ino, struct inode *inode) {
+    if (ino >= sb.max_inum) {
+        return -1;
+    }
 
-	// Step 1: Get the block number where this inode resides on disk
-	
-	// Step 2: Get the offset in the block where this inode resides on disk
+    uint32_t blk_num = sb.i_start_blk + (ino * sizeof(struct inode)) / BLOCK_SIZE;
+    uint32_t offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 
-	// Step 3: Write inode to disk 
+    char buf[BLOCK_SIZE];
+    if (bio_read(blk_num, buf) < 0) {
+        return -1; 
+    }
 
-	return 0;
+    memcpy(buf + offset, inode, sizeof(struct inode));
+
+    if (bio_write(blk_num, buf) < 0) {
+        return -1; 
+    }
+
+    return 0; 
 }
 
 
