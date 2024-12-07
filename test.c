@@ -191,3 +191,503 @@ void test_get_avail_ino_advanced() {
 }
 //PASSED
 
+void test_get_avail_blkno() {
+    // Set up disk file path
+    strcpy(diskfile_path, "./DISKFILE");
+
+    printf("Testing get_avail_blkno...\n");
+
+    // Create and initialize the file system
+    rufs_mkfs();
+
+    // Allocate blocks
+    int blkno1 = get_avail_blkno();
+    printf("Allocated block 1: %d\n", blkno1);
+
+    int blkno2 = get_avail_blkno();
+    printf("Allocated block 2: %d\n", blkno2);
+
+    int blkno3 = get_avail_blkno();
+    printf("Allocated block 3: %d\n", blkno3);
+
+    // Validate bitmap after allocations
+    char buf[BLOCK_SIZE];
+    bio_read(sb.d_bitmap_blk, buf);
+    printf("Bitmap After Allocations: %02x\n", buf[0]);
+    if (buf[0] != 0x07) {
+        printf("Test failed: Incorrect bitmap after allocations. Expected 0x07, got 0x%02x.\n", buf[0]);
+        return;
+    }
+
+    // Deallocate one block
+    clear_bitmap((bitmap_t)buf, blkno2); // Clear the second block
+    bio_write(sb.d_bitmap_blk, buf);
+    printf("Deallocated block: %d\n", blkno2);
+
+    // Validate bitmap after deallocation
+    bio_read(sb.d_bitmap_blk, buf);
+    printf("Bitmap After Deallocation: %02x\n", buf[0]);
+    if (buf[0] != 0x05) {
+        printf("Test failed: Incorrect bitmap after deallocation. Expected 0x05, got 0x%02x.\n", buf[0]);
+        return;
+    }
+
+    // Reallocate the cleared block
+    int blkno4 = get_avail_blkno();
+    printf("Reallocated block: %d\n", blkno4);
+
+    // Validate bitmap after reallocation
+    bio_read(sb.d_bitmap_blk, buf);
+    printf("Bitmap After Reallocation: %02x\n", buf[0]);
+    if (buf[0] == 0x07 && blkno4 == blkno2) {
+        printf("Test passed: Data block allocation and bitmap handling are correct.\n");
+    } else {
+        printf("Test failed: Incorrect bitmap or reallocation. Expected 0x07 and block %d, got 0x%02x and block %d.\n",
+               blkno2, buf[0], blkno4);
+    }
+}
+
+//passed
+
+void test_get_avail_blkno_advanced() {
+    printf("Testing get_avail_blkno (Advanced)...\n");
+
+    // Initialize the diskfile_path global variable
+    strcpy(diskfile_path, "./DISKFILE");
+
+    // Create or load the filesystem
+    rufs_mkfs();
+
+    // Allocate a buffer to read and verify the bitmap
+    char buf[BLOCK_SIZE];
+
+    // Track allocated blocks
+    int allocated_blocks[10];
+
+    // Step 1: Bulk allocation of 10 blocks
+    printf("Bulk Allocating 10 Blocks...\n");
+    for (int i = 0; i < 10; i++) {
+        int blkno = get_avail_blkno();
+        if (blkno == -1) {
+            fprintf(stderr, "Error: Failed to allocate block %d\n", i);
+            return;
+        }
+        allocated_blocks[i] = blkno;
+        printf("Allocated block %d: %d\n", i + 1, blkno);
+    }
+
+    // Read bitmap and validate it after allocations
+    bio_read(sb.d_bitmap_blk, buf);
+    printf("Bitmap After Allocations: %02x\n", buf[0]);
+
+    // Step 2: Random deallocation
+    printf("Deallocating 2 Blocks...\n");
+    clear_bitmap((bitmap_t)buf, allocated_blocks[3]);
+    clear_bitmap((bitmap_t)buf, allocated_blocks[7]);
+    bio_write(sb.d_bitmap_blk, buf);
+
+    printf("Bitmap After Deallocation: %02x\n", buf[0]);
+
+    // Step 3: Reallocate deallocated blocks
+    printf("Reallocating Deallocated Blocks...\n");
+    int reallocated_block1 = get_avail_blkno();
+    int reallocated_block2 = get_avail_blkno();
+
+    printf("Reallocated block 1: %d\n", reallocated_block1);
+    printf("Reallocated block 2: %d\n", reallocated_block2);
+
+    // Validate that reallocated blocks match deallocated blocks
+    if ((reallocated_block1 == allocated_blocks[3] && reallocated_block2 == allocated_blocks[7]) ||
+        (reallocated_block1 == allocated_blocks[7] && reallocated_block2 == allocated_blocks[3])) {
+        printf("Test passed: Reallocated blocks match deallocated blocks.\n");
+    } else {
+        fprintf(stderr, "Test failed: Reallocated blocks do not match deallocated blocks.\n");
+        return;
+    }
+
+    // Read bitmap and validate it after reallocation
+    bio_read(sb.d_bitmap_blk, buf);
+    printf("Bitmap After Reallocation: %02x\n", buf[0]);
+
+    // Step 4: Exhaust remaining blocks
+    printf("Exhausting Remaining Blocks...\n");
+    int blkno;
+    while ((blkno = get_avail_blkno()) != -1) {
+        printf("Exhausted block: %d\n", blkno);
+    }
+
+    // Final validation: Ensure no more blocks are available
+    blkno = get_avail_blkno();
+    if (blkno == -1) {
+        printf("Test passed: No more blocks available.\n");
+    } else {
+        fprintf(stderr, "Test failed: Unexpected block available: %d\n", blkno);
+    }
+}
+
+//PASSED
+
+void test_readi() {
+    printf("Testing readi...\n");
+
+    // Ensure diskfile_path is properly set
+    strcpy(diskfile_path, "./DISKFILE");
+
+    rufs_init(NULL);
+   
+
+    struct inode inode_data;
+
+    // Step 1: Read the root inode (inode 0)
+    if (readi(0, &inode_data) < 0) {
+        fprintf(stderr, "Test failed: Unable to read root inode\n");
+        return;
+    }
+
+    // Step 2: Print the inode values
+    printf("Inode 0 Values:\n");
+    printf("  Inode Number: %d\n", inode_data.ino);
+    printf("  Valid: %d\n", inode_data.valid);
+    printf("  Type: 0x%x\n", inode_data.type);
+    printf("  Link Count: %d\n", inode_data.link);
+
+    // Step 3: Validate values (assuming root inode was initialized in rufs_mkfs)
+    if (inode_data.ino == 0 && inode_data.valid == 1 &&
+        inode_data.type == S_IFDIR && inode_data.link == 2) {
+        printf("Test passed: Inode values are correct.\n");
+    } else {
+        printf("Test failed: Inode values are incorrect.\n");
+    }
+}
+//PASSED
+
+void test_writei() {
+    printf("Testing writei...\n");
+
+    // Ensure diskfile_path is properly set
+    strcpy(diskfile_path, "./DISKFILE");
+
+    rufs_init(NULL);
+
+    struct inode test_inode = {
+        .ino = 1,
+        .valid = 1,
+        .size = 1024,
+        .type = S_IFREG,
+        .link = 1,
+        .direct_ptr = {0},
+        .indirect_ptr = {0}
+    };
+
+    // Step 1: Write the test inode
+    if (writei(1, &test_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to write test inode\n");
+        return;
+    }
+
+    // Step 2: Read back the inode to verify it was written correctly
+    struct inode read_inode;
+    if (readi(1, &read_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to read back test inode\n");
+        return;
+    }
+
+    // Step 3: Validate values
+    printf("Written Inode 1 Values:\n");
+    printf("  Inode Number: %d\n", read_inode.ino);
+    printf("  Valid: %d\n", read_inode.valid);
+    printf("  Size: %d\n", read_inode.size);
+    printf("  Type: 0x%x\n", read_inode.type);
+    printf("  Link Count: %d\n", read_inode.link);
+
+    if (read_inode.ino == 1 && read_inode.valid == 1 &&
+        read_inode.size == 1024 && read_inode.type == S_IFREG &&
+        read_inode.link == 1) {
+        printf("Test passed: Inode values are correct after writei.\n");
+    } else {
+        printf("Test failed: Inode values are incorrect after writei.\n");
+    }
+}
+//passed
+
+void test_dir_find() {
+    printf("Testing dir_find...\n");
+
+    // Set the diskfile path
+    strcpy(diskfile_path, "./DISKFILE");
+    rufs_init(NULL);
+
+    // Step 1: Create a directory inode
+    struct inode dir_inode = {0};
+    dir_inode.ino = 1;
+    dir_inode.valid = 1;
+    dir_inode.size = BLOCK_SIZE;
+    dir_inode.type = S_IFDIR;
+    dir_inode.link = 2;
+
+    // Initialize a block with directory entries
+    char block[BLOCK_SIZE] = {0};
+    struct dirent *entries = (struct dirent *)block;
+
+    entries[0].valid = 1;
+    entries[0].ino = 2;
+    strncpy(entries[0].name, "file1", sizeof(entries[0].name));
+
+    entries[1].valid = 1;
+    entries[1].ino = 3;
+    strncpy(entries[1].name, "file2", sizeof(entries[1].name));
+
+    // Assign block to directory inode
+    dir_inode.direct_ptr[0] = sb.d_start_blk;
+    writei(1, &dir_inode);
+
+    // Write the block to disk
+    bio_write(sb.d_start_blk, block);
+
+    // Step 2: Test finding an existing entry
+    struct dirent found_entry;
+    if (dir_find(1, "file1", strlen("file1"), &found_entry) == 0) {
+        printf("Test passed: Found 'file1'. Inode: %d\n", found_entry.ino);
+    } else {
+        printf("Test failed: 'file1' not found.\n");
+    }
+
+    // Step 3: Test finding a missing entry
+    if (dir_find(1, "missing", strlen("missing"), &found_entry) < 0) {
+        printf("Test passed: 'missing' not found as expected.\n");
+    } else {
+        printf("Test failed: Unexpectedly found 'missing'.\n");
+    }
+}
+//PASSED
+
+
+void test_dir_find_advanced() {
+    printf("Testing dir_find (Advanced)...\n");
+
+    // Ensure diskfile_path is properly set
+    strcpy(diskfile_path, "./DISKFILE");
+    rufs_init(NULL);
+
+    struct inode dir_inode;
+    struct dirent entries[3];
+    struct dirent result;
+
+    // Step 1: Prepare a directory inode
+    memset(&dir_inode, 0, sizeof(struct inode));
+    dir_inode.ino = 1;
+    dir_inode.valid = 1;
+    dir_inode.size = BLOCK_SIZE;
+    dir_inode.type = S_IFDIR;
+    dir_inode.link = 2;
+
+    // Allocate a block for the directory
+    int block_num = get_avail_blkno();
+    dir_inode.direct_ptr[0] = sb.d_start_blk + block_num;
+
+    // Initialize directory entries
+    strcpy(entries[0].name, "file1");
+    entries[0].valid = 1;
+    entries[0].ino = 2;
+
+    strcpy(entries[1].name, "file2");
+    entries[1].valid = 1;
+    entries[1].ino = 3;
+
+    strcpy(entries[2].name, "file3");
+    entries[2].valid = 1;
+    entries[2].ino = 4;
+
+    // Write the entries to the allocated block
+    if (bio_write(dir_inode.direct_ptr[0], entries) < 0) {
+        fprintf(stderr, "Test failed: Unable to write directory entries.\n");
+        return;
+    }
+
+    // Write the directory inode to disk
+    if (writei(1, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to write directory inode.\n");
+        return;
+    }
+
+    // Step 2: Test finding an existing entry ("file1")
+    if (dir_find(1, "file1", strlen("file1"), &result) == 0) {
+        printf("Test passed: Found 'file1'. Inode: %d\n", result.ino);
+    } else {
+        printf("Test failed: Unable to find 'file1'.\n");
+    }
+
+    // Step 3: Test finding another existing entry ("file2")
+    if (dir_find(1, "file2", strlen("file2"), &result) == 0) {
+        printf("Test passed: Found 'file2'. Inode: %d\n", result.ino);
+    } else {
+        printf("Test failed: Unable to find 'file2'.\n");
+    }
+
+    // Step 4: Test finding a non-existing entry ("missing")
+    if (dir_find(1, "missing", strlen("missing"), &result) < 0) {
+        printf("Test passed: 'missing' not found as expected.\n");
+    } else {
+        printf("Test failed: Found 'missing' unexpectedly.\n");
+    }
+
+    // Step 5: Test finding an entry with a name that exceeds the maximum length
+    char long_name[NAME_LEN + 10];
+    memset(long_name, 'a', NAME_LEN + 9);
+    long_name[NAME_LEN + 9] = '\0';
+
+    if (dir_find(1, long_name, strlen(long_name), &result) < 0) {
+        printf("Test passed: Long name not found as expected.\n");
+    } else {
+        printf("Test failed: Found long name unexpectedly.\n");
+    }
+
+    // Step 6: Test finding a valid entry but with extra trailing characters
+    if (dir_find(1, "file1_extra", strlen("file1_extra"), &result) < 0) {
+        printf("Test passed: 'file1_extra' not found as expected.\n");
+    } else {
+        printf("Test failed: Found 'file1_extra' unexpectedly.\n");
+    }
+}
+
+//PASSED
+
+//DOESN'T PASS. KEEPS ADDING DUPLICATE ENTRIES. ISSUE WITH CHECKING LOGIC
+void test_dir_add() {
+    printf("Testing dir_add...\n");
+
+    // Initialize the file system
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close(); // Close any existing filesystem
+    rufs_mkfs(); // Force a fresh filesystem
+
+    struct inode dir_inode = {0};
+
+    // Initialize a directory inode (simulating a root directory)
+    dir_inode.ino = 1;
+    dir_inode.valid = 1;
+    dir_inode.size = 0;
+    dir_inode.type = S_IFDIR;
+    memset(dir_inode.direct_ptr, 0, sizeof(dir_inode.direct_ptr));
+
+    // Write the directory inode to disk
+    if (writei(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to write initial directory inode.\n");
+        return;
+    }
+
+    // Add entries to the directory
+    const char *file1 = "file1";
+    const char *file2 = "file2";
+    const char *duplicate = "file1";
+
+    if (dir_add(dir_inode, 2, file1, strlen(file1)) < 0) {
+        fprintf(stderr, "Test failed: Unable to add 'file1'.\n");
+        return;
+    }
+    printf("Added 'file1' to directory.\n");
+
+    if (dir_add(dir_inode, 3, file2, strlen(file2)) < 0) {
+        fprintf(stderr, "Test failed: Unable to add 'file2'.\n");
+        return;
+    }
+    printf("Added 'file2' to directory.\n");
+
+    // Attempt to add a duplicate entry
+    if (dir_add(dir_inode, 4, duplicate, strlen(duplicate)) == 0) {
+        fprintf(stderr, "Test failed: Duplicate entry 'file1' was added.\n");
+        return;
+    }
+    printf("Correctly handled duplicate entry for 'file1'.\n");
+
+    // Fill up the directory based on entry capacity
+    int max_entries = (BLOCK_SIZE / sizeof(struct dirent)) * 16; // Adjust for multiple blocks
+    int i;
+    for (i = 4; i <= max_entries; i++) {
+        char filename[10];
+        snprintf(filename, sizeof(filename), "file%d", i);
+        if (dir_add(dir_inode, i, filename, strlen(filename)) < 0) {
+            printf("Directory full after %d entries.\n", i - 3); // Adjusting for the already added entries
+            break;
+        }
+    }
+
+    if (i > max_entries) {
+        fprintf(stderr, "Test failed: Directory did not report full capacity as expected.\n");
+        return;
+    }
+
+    // Verify final inode state
+    if (readi(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to read directory inode after operations.\n");
+        return;
+    }
+
+    printf("Final directory size: %d bytes.\n", dir_inode.size);
+    printf("Test passed: dir_add behaves correctly.\n");
+}
+
+//doesn't pass all tests, issues with some, i believe related to dir_add
+void test_get_node_by_path() {
+    printf("Testing get_node_by_path...\n");
+
+    // Initialize the file system
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close(); // Close any existing filesystem
+    rufs_mkfs(); // Force a fresh filesystem
+
+    // Initialize the root directory inode
+    struct inode root_inode = {0};
+    root_inode.ino = 0;
+    root_inode.valid = 1;
+    root_inode.type = S_IFDIR;
+    memset(root_inode.direct_ptr, 0, sizeof(root_inode.direct_ptr));
+    writei(0, &root_inode);
+
+    // Add entries to the root directory
+    dir_add(root_inode, 1, "dir1", strlen("dir1"));
+    dir_add(root_inode, 2, "file1", strlen("file1"));
+
+    // Initialize an inode for "dir1"
+    struct inode dir1_inode = {0};
+    dir1_inode.ino = 1;
+    dir1_inode.valid = 1;
+    dir1_inode.type = S_IFDIR;
+    memset(dir1_inode.direct_ptr, 0, sizeof(dir1_inode.direct_ptr));
+    writei(1, &dir1_inode);
+
+    // Add entries to "dir1"
+    dir_add(dir1_inode, 3, "file2", strlen("file2"));
+
+    // Test cases
+    struct inode result;
+    if (get_node_by_path("/", 0, &result) == 0) {
+        printf("Test passed: Found '/'.\n");
+    } else {
+        printf("Test failed: Could not find '/'.\n");
+    }
+
+    if (get_node_by_path("/dir1", 0, &result) == 0) {
+        printf("Test passed: Found '/dir1'.\n");
+    } else {
+        printf("Test failed: Could not find '/dir1'.\n");
+    }
+
+    if (get_node_by_path("/dir1/file2", 0, &result) == 0) {
+        printf("Test passed: Found '/dir1/file2'.\n");
+    } else {
+        printf("Test failed: Could not find '/dir1/file2'.\n");
+    }
+
+    if (get_node_by_path("/file1", 0, &result) == 0) {
+        printf("Test passed: Found '/file1'.\n");
+    } else {
+        printf("Test failed: Could not find '/file1'.\n");
+    }
+
+    if (get_node_by_path("/nonexistent", 0, &result) < 0) {
+        printf("Test passed: '/nonexistent' not found as expected.\n");
+    } else {
+        printf("Test failed: Unexpectedly found '/nonexistent'.\n");
+    }
+}
