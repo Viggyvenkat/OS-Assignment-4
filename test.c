@@ -691,3 +691,169 @@ void test_get_node_by_path() {
         printf("Test failed: Unexpectedly found '/nonexistent'.\n");
     }
 }
+
+void test_dir_add_basic() {
+    printf("Testing dir_add basic scenario...\n");
+
+    // Initialize filesystem
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close(); // Close any existing filesystem
+    if (rufs_mkfs() < 0) {
+        fprintf(stderr, "Failed to create filesystem.\n");
+        return;
+    }
+
+    // Create a directory inode (e.g., inode #1)
+    struct inode dir_inode;
+    memset(&dir_inode, 0, sizeof(struct inode));
+    dir_inode.ino = 1;          // Not the root, just a test directory
+    dir_inode.valid = 1;
+    dir_inode.type = S_IFDIR; 
+    dir_inode.size = 0;         // No entries yet
+    dir_inode.link = 2;         // '.' and '..' counts, if applicable
+    memset(dir_inode.direct_ptr, 0, sizeof(dir_inode.direct_ptr));
+
+    // Write this directory inode to disk
+    if (writei(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to write initial directory inode.\n");
+        return;
+    }
+
+    // Add a single file entry to this directory
+    const char *filename = "testfile";
+    uint16_t new_file_ino = 2; // Assume we got an inode for the file earlier, or just pick one
+    if (dir_add(dir_inode, new_file_ino, filename, strlen(filename)) < 0) {
+        fprintf(stderr, "Test failed: dir_add() could not add '%s'.\n", filename);
+        return;
+    }
+    printf("Successfully added '%s' to directory with inode=%d.\n", filename, dir_inode.ino);
+
+    // Verify that the file was added using dir_find
+    struct dirent found_entry;
+    if (dir_find(dir_inode.ino, filename, strlen(filename), &found_entry) == 0) {
+        // Check if found_entry matches what we expect
+        if (found_entry.ino == new_file_ino) {
+            printf("Test passed: '%s' found with correct inode=%d.\n", filename, found_entry.ino);
+        } else {
+            fprintf(stderr, "Test failed: Found '%s' but inode=%d does not match expected=%d.\n",
+                    filename, found_entry.ino, new_file_ino);
+        }
+    } else {
+        fprintf(stderr, "Test failed: Could not find '%s' after dir_add().\n", filename);
+    }
+}
+//PASSED
+
+void test_dir_add_multiple() {
+    printf("Testing dir_add with multiple entries...\n");
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close();
+    if (rufs_mkfs() < 0) {
+        fprintf(stderr, "Failed to create filesystem.\n");
+        return;
+    }
+
+    // Set up a directory inode
+    struct inode dir_inode;
+    memset(&dir_inode, 0, sizeof(struct inode));
+    dir_inode.ino = 1;
+    dir_inode.valid = 1;
+    dir_inode.type = S_IFDIR;
+    dir_inode.size = 0;
+    dir_inode.link = 2;
+    memset(dir_inode.direct_ptr, 0, sizeof(dir_inode.direct_ptr));
+
+    if (writei(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Failed to write directory inode.\n");
+        return;
+    }
+
+    // Add multiple files
+    const char *files[] = { "file1", "file2", "file3", "file4" };
+    int num_files = sizeof(files)/sizeof(files[0]);
+
+    // Assign arbitrary inode numbers for testing
+    uint16_t inodes[] = { 2, 3, 4, 5 };
+
+    // Add each file and verify
+    for (int i = 0; i < num_files; i++) {
+        if (dir_add(dir_inode, inodes[i], files[i], strlen(files[i])) < 0) {
+            fprintf(stderr, "Test failed: Could not add '%s' (ino=%d) to directory.\n", files[i], inodes[i]);
+            return;
+        }
+
+        // Verify that the file was actually added
+        struct dirent found_entry;
+        if (dir_find(dir_inode.ino, files[i], strlen(files[i]), &found_entry) < 0) {
+            fprintf(stderr, "Test failed: Could not find '%s' after adding.\n", files[i]);
+            return;
+        } else {
+            if (found_entry.ino == inodes[i]) {
+                printf("Successfully found '%s' with ino=%d.\n", files[i], found_entry.ino);
+            } else {
+                fprintf(stderr, "Test failed: Expected ino=%d for '%s', got %d.\n", inodes[i], files[i], found_entry.ino);
+                return;
+            }
+        }
+    }
+
+    printf("All multiple additions test passed: files added and found successfully.\n");
+}
+
+//PASSED
+
+void test_dir_add_duplicate() {
+    printf("Testing dir_add with duplicate entries...\n");
+    
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close();
+    if (rufs_mkfs() < 0) {
+        fprintf(stderr, "Failed to create filesystem.\n");
+        return;
+    }
+
+    // Set up a directory inode
+    struct inode dir_inode;
+    memset(&dir_inode, 0, sizeof(struct inode));
+    dir_inode.ino = 1;
+    dir_inode.valid = 1;
+    dir_inode.type = S_IFDIR;
+    dir_inode.size = 0;
+    dir_inode.link = 2;
+    memset(dir_inode.direct_ptr, 0, sizeof(dir_inode.direct_ptr));
+
+    if (writei(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Failed to write directory inode.\n");
+        return;
+    }
+
+    const char *filename = "duplicate_test";
+    uint16_t file_ino = 2; 
+
+    // Add the file the first time
+    if (dir_add(dir_inode, file_ino, filename, strlen(filename)) < 0) {
+        fprintf(stderr, "Test failed: dir_add() could not add '%s' initially.\n", filename);
+        return;
+    }
+    printf("Successfully added '%s' to directory.\n", filename);
+
+    // Verify the file was added
+    struct dirent found_entry;
+    if (dir_find(dir_inode.ino, filename, strlen(filename), &found_entry) < 0) {
+        fprintf(stderr, "Test failed: Could not find '%s' after adding.\n", filename);
+        return;
+    } else {
+        printf("Verified '%s' was found with ino=%d.\n", filename, found_entry.ino);
+    }
+
+    // Attempt to add the same file again (duplicate)
+    int ret = dir_add(dir_inode, file_ino + 1, filename, strlen(filename));
+    if (ret == 0) {
+        fprintf(stderr, "Test failed: dir_add() allowed a duplicate '%s'.\n", filename);
+        return;
+    } else {
+        printf("Test passed: dir_add() correctly rejected duplicate '%s'.\n", filename);
+    }
+}
+
+//PASSED

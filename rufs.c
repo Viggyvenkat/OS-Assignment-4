@@ -205,20 +205,66 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 
 	// Write directory entry
 
+    //Changed test code to re-read the inode from disk after each dir_add() call in test code. 
+    //This ensures that dir_inode in the test is always in sync with what’s on disk.
+
+    // First, do a duplicate check with dir_find().
+    // checks all existing entries across all allocated blocks.
+    struct dirent existing_entry;
+    if (dir_find(dir_inode.ino, fname, name_len, &existing_entry) == 0) {
+        // The entry already exists in the directory
+        fprintf(stderr, "dir_add: Duplicate entry '%s' found before adding.\n", fname);
+        return -1;
+    }
+
 	struct dirent new_dirent = {0};
     new_dirent.ino = f_ino;
     new_dirent.valid = 1;
     strncpy(new_dirent.name, fname, NAME_LEN - 1);
     new_dirent.name[NAME_LEN - 1] = '\0';        
-    new_dirent.len = name_len;
-//undo
+    new_dirent.len = (uint16_t)name_len;
 
+    char buf[BLOCK_SIZE];
+    int entries_per_block = BLOCK_SIZE / sizeof(struct dirent);
+
+    //Try to find a free slot in existing blocks
     for (int i = 0; i < 16; i++) {
-        char buf[BLOCK_SIZE];
+        if (dir_inode.direct_ptr[i] == 0) {
+            // No more allocated blocks, break and allocate new block if needed
+            break;
+        }
 
+        if (bio_read(dir_inode.direct_ptr[i], buf) < 0) {
+            fprintf(stderr, "dir_add: Failed to read block %d.\n", dir_inode.direct_ptr[i]);
+            return -1;
+        }
+
+        struct dirent *entry = (struct dirent *)buf;
+        for (int j = 0; j < entries_per_block; j++) {
+            if (!entry[j].valid) { 
+                // Found a free slot in an existing block
+                memset(&entry[j], 0, sizeof(struct dirent));
+                memcpy(&entry[j], &new_dirent, sizeof(struct dirent));
+                if (bio_write(dir_inode.direct_ptr[i], buf) < 0) {
+                    fprintf(stderr, "dir_add: Failed to write updated block.\n");
+                    return -1;
+                }
+                if (writei(dir_inode.ino, &dir_inode) < 0) {
+                    fprintf(stderr, "dir_add: Failed to write updated inode.\n");
+                    return -1;
+                }
+                fprintf(stderr, "dir_add: Entry '%s' added to existing block %d, index %d.\n",
+                        fname, dir_inode.direct_ptr[i], j);
+                return 0;
+            }
+        }
+    }
+
+    // No free slot in existing blocks, allocate a new block
+    for (int i = 0; i < 16; i++) {
         if (dir_inode.direct_ptr[i] == 0) {
             if (i == 15) {
-                // If the last block is reached and no space, directory is full
+                // No more space for new blocks
                 fprintf(stderr, "dir_add: Maximum directory capacity reached.\n");
                 return -ENOSPC;
             }
@@ -229,37 +275,42 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
                 return -1;
             }
 
-            dir_inode.direct_ptr[i] = new_block;
+            int abs_block = sb.d_start_blk + new_block;
+            dir_inode.direct_ptr[i] = abs_block;
             dir_inode.size += BLOCK_SIZE;
             memset(buf, 0, BLOCK_SIZE);
-            bio_write(new_block, buf);
-        }
-
-        if (bio_read(dir_inode.direct_ptr[i], buf) < 0) {
-            fprintf(stderr, "dir_add: Failed to read block %d.\n", dir_inode.direct_ptr[i]);
-            return -1;
-        }
-
-        struct dirent *entry = (struct dirent *)buf;
-        for (int j = 0; j < BLOCK_SIZE / sizeof(struct dirent); j++) {
-            //debug:
-            fprintf(stderr, "dir_add: Checking entry[%d]: valid=%d, name='%s', ino=%d\n",
-                    j, entry[j].valid, entry[j].valid ? entry[j].name : "NULL", entry[j].ino);
-            //dup check
-            if (entry[j].valid && strncmp(entry[j].name, fname, NAME_LEN) == 0 && entry[j].len == name_len) {
-                fprintf(stderr, "dir_add: Duplicate entry '%s' found.\n", fname);
-                return -1; // Duplicate entry detected
-            }
-            if (!entry[j].valid) { //if empty entry found, add new entry here
-                memset(&entry[j], 0, sizeof(struct dirent));
-                memcpy(&entry[j], &new_dirent, sizeof(struct dirent));
-                bio_write(dir_inode.direct_ptr[i], buf);
-                writei(dir_inode.ino, &dir_inode);
-                fprintf(stderr, "dir_add: Entry '%s' added to block %d, index %d.\n",
-                        fname, dir_inode.direct_ptr[i], j);
-                return 0; //success
+            if (bio_write(abs_block, buf) < 0) {
+                fprintf(stderr, "dir_add: Failed to write new block.\n");
+                return -1;
             }
 
+            if (writei(dir_inode.ino, &dir_inode) < 0) {
+                fprintf(stderr, "dir_add: Failed to write updated inode after new block allocation.\n");
+                return -1;
+            }
+
+            // Now add the entry in the newly allocated block
+            if (bio_read(abs_block, buf) < 0) {
+                fprintf(stderr, "dir_add: Failed to read newly allocated block %d.\n", abs_block);
+                return -1;
+            }
+
+            struct dirent *entry = (struct dirent *)buf;
+            // The new block is empty, so entry[0] is guaranteed free
+            memset(&entry[0], 0, sizeof(struct dirent));
+            memcpy(&entry[0], &new_dirent, sizeof(struct dirent));
+            if (bio_write(abs_block, buf) < 0) {
+                fprintf(stderr, "dir_add: Failed to write new entry to new block.\n");
+                return -1;
+            }
+
+            if (writei(dir_inode.ino, &dir_inode) < 0) {
+                fprintf(stderr, "dir_add: Failed to write updated inode after adding entry.\n");
+                return -1;
+            }
+
+            fprintf(stderr, "dir_add: Entry '%s' added to new block %d, index 0.\n", fname, abs_block);
+            return 0;
         }
     }
 
@@ -300,7 +351,7 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
     char *token = strtok(path_copy, "/");
     struct inode current_inode;
     if (readi(ino, &current_inode) < 0) {
-        fprintf(stderr, "get_node_by_path: Failed to read inode %d.\n", current_ino);
+       
         return -1;
     }
 
@@ -674,31 +725,52 @@ void test_dir_add() {
     const char *file2 = "file2";
     const char *duplicate = "file1";
 
+    // Add 'file1'
     if (dir_add(dir_inode, 2, file1, strlen(file1)) < 0) {
         fprintf(stderr, "Test failed: Unable to add 'file1'.\n");
         return;
     }
     printf("Added 'file1' to directory.\n");
 
+    // Re-read inode from disk to synchronize in-memory and on-disk state
+    if (readi(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to re-read inode after adding 'file1'.\n");
+        return;
+    }
+
+    // Add 'file2'
     if (dir_add(dir_inode, 3, file2, strlen(file2)) < 0) {
         fprintf(stderr, "Test failed: Unable to add 'file2'.\n");
         return;
     }
     printf("Added 'file2' to directory.\n");
 
-    // Attempt to add a duplicate entry
+    // Re-read inode again
+    if (readi(dir_inode.ino, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: Unable to re-read inode after adding 'file2'.\n");
+        return;
+    }
+
+    // Attempt to add a duplicate entry 'file1'
     if (dir_add(dir_inode, 4, duplicate, strlen(duplicate)) == 0) {
         fprintf(stderr, "Test failed: Duplicate entry 'file1' was added.\n");
         return;
     }
     printf("Correctly handled duplicate entry for 'file1'.\n");
 
-    // Fill up the directory based on entry capacity
+    // Fill up the directory
     int max_entries = (BLOCK_SIZE / sizeof(struct dirent)) * 16; // Adjust for multiple blocks
     int i;
     for (i = 4; i <= max_entries; i++) {
         char filename[10];
         snprintf(filename, sizeof(filename), "file%d", i);
+        
+        // Re-read inode before each add, just to be safe
+        if (readi(dir_inode.ino, &dir_inode) < 0) {
+            fprintf(stderr, "Test failed: Unable to re-read inode before adding '%s'.\n", filename);
+            return;
+        }
+
         if (dir_add(dir_inode, i, filename, strlen(filename)) < 0) {
             printf("Directory full after %d entries.\n", i - 3); // Adjusting for the already added entries
             break;
@@ -710,7 +782,7 @@ void test_dir_add() {
         return;
     }
 
-    // Verify final inode state
+    // Finally, re-read inode to confirm final state
     if (readi(dir_inode.ino, &dir_inode) < 0) {
         fprintf(stderr, "Test failed: Unable to read directory inode after operations.\n");
         return;
@@ -719,7 +791,6 @@ void test_dir_add() {
     printf("Final directory size: %d bytes.\n", dir_inode.size);
     printf("Test passed: dir_add behaves correctly.\n");
 }
-
 
 // Conditional Main Function
 // when testing, run:
@@ -740,6 +811,10 @@ int main() {
     //test_dir_find_advanced();
     test_dir_add();
     //test_get_node_by_path();
+    //test_dir_find_only();
+    //test_dir_add_basic();
+    //test_dir_add_multiple();
+    //test_dir_add_duplicate();
     return 0;
 }
 #else
