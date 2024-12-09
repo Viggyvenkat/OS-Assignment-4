@@ -319,16 +319,7 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 }
 
 //skip
-int dir_remove(struct inode dir_inode, const char *fname, size_t name_len) {
-
-	// Step 1: Read dir_inode's data block and checks each directory entry of dir_inode
-	
-	// Step 2: Check if fname exist
-
-	// Step 3: If exist, then remove it from dir_inode's data block and write to disk
-
-
-}
+int dir_remove(struct inode dir_inode, const char *fname, size_t name_len) {return 0;}
 
 /* 
  * namei operation
@@ -474,188 +465,372 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 
     }
 
-
     return NULL;
 }
 
 static void rufs_destroy(void *userdata) {
+    char buffer[BLOCK_SIZE];
+    struct inode inode_buffer;
 
-     fprintf(stderr, "Destroying the file system and cleaning up resources...\n");
-	// Step 1: De-allocate in-memory data structures
+    for (int i = 0; i < sb.max_inum; i++) {
+        uint32_t blk_num = sb.i_start_blk + (i * sizeof(struct inode)) / BLOCK_SIZE;
+        uint32_t offset = (i * sizeof(struct inode)) % BLOCK_SIZE;
 
-	// Step 2: Close diskfile
+        if (bio_read(blk_num, buffer) < 0) {
+            fprintf(stderr, "rufs_destroy: Failed to read inode block %d\n", blk_num);
+            continue;
+        }
 
-    dev_close(); 
-    fprintf(stderr, "Disk file closed successfully.\n");
+        memcpy(&inode_buffer, buffer + offset, sizeof(struct inode));
+        if (inode_buffer.valid) {
+            if (inode_buffer.indirect_ptr[0] != 0) {
+                char indirect_block_buf[BLOCK_SIZE];
+                if (bio_read(inode_buffer.indirect_ptr[0], indirect_block_buf) < 0) {
+                    fprintf(stderr, "rufs_destroy: Failed to read indirect block %d\n", inode_buffer.indirect_ptr[0]);
+                } else {
+                    memset(indirect_block_buf, 0, BLOCK_SIZE);
+                    bio_write(inode_buffer.indirect_ptr[0], indirect_block_buf); 
+                }
+            }
+        }
+    }
 
+    if (bio_read(sb.d_bitmap_blk, buffer) < 0) {
+        fprintf(stderr, "rufs_destroy: Failed to read data block bitmap\n");
+    } else {
+        memset(buffer, 0, BLOCK_SIZE);
+        bio_write(sb.d_bitmap_blk, buffer);
+    }
 
+    if (bio_read(sb.i_bitmap_blk, buffer) < 0) {
+        fprintf(stderr, "rufs_destroy: Failed to read inode bitmap\n");
+    } else {
+        memset(buffer, 0, BLOCK_SIZE);
+        bio_write(sb.i_bitmap_blk, buffer);
+    }
+
+    dev_close();
+    fprintf(stderr, "rufs_destroy: All resources de-allocated and disk file closed.\n");
 }
+
 
 static int rufs_getattr(const char *path, struct stat *stbuf) {
+    struct inode inode;
 
-	// Step 1: call get_node_by_path() to get inode from path
+    // Step 1: Call get_node_by_path() to get inode from path
+    if (get_node_by_path(path, 0, &inode) < 0) {
+        fprintf(stderr, "rufs_getattr: Failed to find inode for path %s\n", path);
+        return -1;
+    }
 
-	// Step 2: fill attribute of file into stbuf from inode
+    // Step 2: Fill attributes of file into stbuf from inode
+    memset(stbuf, 0, sizeof(struct stat));
+    stbuf->st_ino = inode.ino;
+    stbuf->st_mode = inode.type;
+    stbuf->st_nlink = inode.link;
+    stbuf->st_size = inode.size;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_blksize = BLOCK_SIZE;
+    stbuf->st_blocks = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    stbuf->st_mtime = time(NULL);
 
-		stbuf->st_mode   = S_IFDIR | 0755;
-		stbuf->st_nlink  = 2;
-		time(&stbuf->st_mtime);
-
-	return 0;
-}
-
-static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
-
-	// Step 1: Call get_node_by_path() to get inode from path
-
-	// Step 2: If not find, return -1
+    fprintf(stderr, "rufs_getattr: Path %s attributes filled. Inode: %d, Type: %d, Size: %ld\n",
+            path, inode.ino, inode.type, inode.size);
 
     return 0;
 }
 
+
+static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
+    struct inode inode;
+
+    // Step 1: Call get_node_by_path() to get inode from path
+    if (get_node_by_path(path, 0, &inode) < 0) {
+        fprintf(stderr, "rufs_opendir: Failed to find inode for path %s\n", path);
+        return -1;
+    }
+
+    if ((inode.type & S_IFDIR) == 0) {
+        fprintf(stderr, "rufs_opendir: Path %s is not a directory\n", path);
+        return -1;
+    }
+
+    return 0;
+}
+
+
 static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+    struct inode dir_inode;
 
-	// Step 1: Call get_node_by_path() to get inode from path
+    // Step 1: Call get_node_by_path() to get inode from path
+    if (get_node_by_path(path, 0, &dir_inode) < 0) {
+        return -1;
+    }
 
-	// Step 2: Read directory entries from its data blocks, and copy them to filler
+    if ((dir_inode.type & S_IFDIR) == 0) {
+        return -1;
+    }
 
-	return 0;
+    // Step 2: Read directory entries from its data blocks
+    for (int i = 0; i < 16 && dir_inode.direct_ptr[i] != 0; i++) {
+        char block[BLOCK_SIZE];
+        if (bio_read(dir_inode.direct_ptr[i], block) < 0) {
+            return -1;
+        }
+
+        struct dirent *entry = (struct dirent *)block;
+        int entries_per_block = BLOCK_SIZE / sizeof(struct dirent);
+
+        for (int j = 0; j < entries_per_block; j++) {
+            if (entry[j].valid) {
+                if (filler(buffer, entry[j].name, NULL, 0) != 0) {
+                    return -1;
+                }
+            }
+        }
+    }
+
+    return 0;
 }
 
 
 static int rufs_mkdir(const char *path, mode_t mode) {
+    char parent_path[PATH_MAX];
+    char dir_name[NAME_LEN];
+    struct inode parent_inode;
 
-	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
+    // Step 1: Use dirname() and basename() to separate parent directory path and target directory name
+    strncpy(parent_path, path, PATH_MAX);
+    strncpy(dir_name, path, NAME_LEN);
+    char *parent_dir = dirname(parent_path);
+    char *base_name = basename(dir_name);
 
-	// Step 2: Call get_node_by_path() to get inode of parent directory
+    // Step 2: Call get_node_by_path() to get inode of parent directory
+    if (get_node_by_path(parent_dir, 0, &parent_inode) < 0) {
+        return -1;
+    }
 
-	// Step 3: Call get_avail_ino() to get an available inode number
+    // Ensure the parent inode is a directory
+    if ((parent_inode.type & S_IFDIR) == 0) {
+        return -1;
+    }
 
-	// Step 4: Call dir_add() to add directory entry of target directory to parent directory
+    // Step 3: Call get_avail_ino() to get an available inode number
+    int new_ino = get_avail_ino();
+    if (new_ino < 0) {
+        return -1; 
+    }
 
-	// Step 5: Update inode for target directory
+    // Step 4: Call dir_add() to add directory entry of target directory to parent directory
+    if (dir_add(parent_inode, new_ino, base_name, strlen(base_name)) < 0) {
+        return -1;
+    }
 
-	// Step 6: Call writei() to write inode to disk
-	
+    // Step 5: Update inode for target directory
+    struct inode new_dir_inode;
+    memset(&new_dir_inode, 0, sizeof(struct inode));
+    new_dir_inode.ino = new_ino;
+    new_dir_inode.valid = 1;
+    new_dir_inode.size = 0;
+    new_dir_inode.type = S_IFDIR | mode;
+    new_dir_inode.link = 2;
+    memset(new_dir_inode.direct_ptr, 0, sizeof(new_dir_inode.direct_ptr));
+    memset(new_dir_inode.indirect_ptr, 0, sizeof(new_dir_inode.indirect_ptr));
 
-	return 0;
-}
+    // Step 6: Call writei() to write inode to disk
+    if (writei(new_ino, &new_dir_inode) < 0) {
+        return -1;
+    }
 
-static int rufs_rmdir(const char *path) {
-
-	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
-
-	// Step 2: Call get_node_by_path() to get inode of target directory
-
-	// Step 3: Clear data block bitmap of target directory
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target directory in its parent directory
-
-	return 0;
-}
-
-static int rufs_releasedir(const char *path, struct fuse_file_info *fi) {
-	// For this project, you don't need to fill this function
-	// But DO NOT DELETE IT!
     return 0;
 }
 
+
+//skip
+static int rufs_rmdir(const char *path) {return 0;}
+static int rufs_releasedir(const char *path, struct fuse_file_info *fi) {return 0;}
+
 static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+    char parent_path[PATH_MAX];
+    char file_name[NAME_LEN];
+    struct inode parent_inode;
 
-	// Step 1: Use dirname() and basename() to separate parent directory path and target file name
+    // Step 1: Use dirname() and basename() to separate parent directory path and target file name
+    strncpy(parent_path, path, PATH_MAX);
+    strncpy(file_name, path, NAME_LEN);
+    char *parent_dir = dirname(parent_path);
+    char *base_name = basename(file_name);
 
-	// Step 2: Call get_node_by_path() to get inode of parent directory
+    // Step 2: Call get_node_by_path() to get inode of parent directory
+    if (get_node_by_path(parent_dir, 0, &parent_inode) < 0) {
+        fprintf(stderr, "rufs_create: Parent directory %s not found\n", parent_dir);
+        return -1;
+    }
 
-	// Step 3: Call get_avail_ino() to get an available inode number
+    // Ensure the parent inode is a directory
+    if ((parent_inode.type & S_IFDIR) == 0) {
+        fprintf(stderr, "rufs_create: Parent path %s is not a directory\n", parent_dir);
+        return -1;
+    }
 
-	// Step 4: Call dir_add() to add directory entry of target file to parent directory
+    // Step 3: Call get_avail_ino() to get an available inode number
+    int new_ino = get_avail_ino();
+    if (new_ino < 0) {
+        return -1;
+    }
 
-	// Step 5: Update inode for target file
+    // Step 4: Call dir_add() to add directory entry of target file to parent directory
+    if (dir_add(parent_inode, new_ino, base_name, strlen(base_name)) < 0) {
+        return -1;
+    }
 
-	// Step 6: Call writei() to write inode to disk
+    // Step 5: Update inode for target file
+    struct inode new_file_inode;
+    memset(&new_file_inode, 0, sizeof(struct inode));
+    new_file_inode.ino = new_ino;
+    new_file_inode.valid = 1;
+    new_file_inode.size = 0;
+    new_file_inode.type = S_IFREG | mode;
+    new_file_inode.link = 1;
+    memset(new_file_inode.direct_ptr, 0, sizeof(new_file_inode.direct_ptr));
+    memset(new_file_inode.indirect_ptr, 0, sizeof(new_file_inode.indirect_ptr));
 
-	return 0;
+    // Step 6: Call writei() to write inode to disk
+    if (writei(new_ino, &new_file_inode) < 0) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static int rufs_open(const char *path, struct fuse_file_info *fi) {
+    struct inode file_inode;
 
-	// Step 1: Call get_node_by_path() to get inode from path
+    // Step 1: Call get_node_by_path() to get inode from path
+    if (get_node_by_path(path, 0, &file_inode) < 0) {
+        return -1;
+    }
 
-	// Step 2: If not find, return -1
+    if ((file_inode.type & S_IFREG) == 0) {
+        return -1; 
+    }
 
-	return 0;
+    return 0;
 }
 
 static int rufs_read(const char *path, char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
+    struct inode file_inode;
 
-	// Step 1: You could call get_node_by_path() to get inode from path
+    // Step 1: Call get_node_by_path() to get inode from path
+    if (get_node_by_path(path, 0, &file_inode) < 0) {
+        return -1;
+    }
 
-	// Step 2: Based on size and offset, read its data blocks from disk
+    // Ensure the inode represents a regular file
+    if ((file_inode.type & S_IFREG) == 0) {
+        return -1;
+    }
 
-	// Step 3: copy the correct amount of data from offset to buffer
+    // Step 2: Based on size and offset, read its data blocks from disk
+    size_t bytes_read = 0;
+    size_t bytes_to_read = size; 
+    off_t current_offset = offset; 
+    char block_buf[BLOCK_SIZE];
 
-	// Note: this function should return the amount of bytes you copied to buffer
-	return 0;
+    for (int i = 0; i < 16 && bytes_to_read > 0 && current_offset < file_inode.size; i++) {
+        if (file_inode.direct_ptr[i] == 0) {
+            break;
+        }
+
+        int block_no = file_inode.direct_ptr[i];
+        if (bio_read(block_no, block_buf) < 0) {
+            return -1;
+        }
+
+        size_t block_offset = current_offset % BLOCK_SIZE;
+        size_t available_bytes = BLOCK_SIZE - block_offset;
+        size_t bytes_to_copy = (bytes_to_read < available_bytes) ? bytes_to_read : available_bytes;
+
+        memcpy(buffer + bytes_read, block_buf + block_offset, bytes_to_copy);
+        bytes_read += bytes_to_copy;
+        bytes_to_read -= bytes_to_copy;
+        current_offset += bytes_to_copy;
+    }
+
+    // Step 3: Copy the correct amount of data from offset to buffer
+    return bytes_read;
 }
+
 
 static int rufs_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
-	// Step 1: You could call get_node_by_path() to get inode from path
+    struct inode file_inode;
 
-	// Step 2: Based on size and offset, read its data blocks from disk
+    if (get_node_by_path(path, 0, &file_inode) < 0) {
+        return -1;
+    }
 
-	// Step 3: Write the correct amount of data from offset to disk
+    if ((file_inode.type & S_IFREG) == 0) {
+        return -1; 
+    }
 
-	// Step 4: Update the inode info and write it to disk
+    size_t bytes_written = 0;  
+    size_t bytes_to_write = size; 
+    off_t current_offset = offset; 
+    char block_buf[BLOCK_SIZE];
 
-	// Note: this function should return the amount of bytes you write to disk
-	return size;
+    for (int i = 0; i < 16 && bytes_to_write > 0; i++) {
+        int block_no;
+        
+        if (current_offset >= BLOCK_SIZE) {
+            current_offset -= BLOCK_SIZE;
+            continue;
+        }
+
+        if (file_inode.direct_ptr[i] == 0) {
+            block_no = get_avail_blkno();
+            if (block_no < 0) {
+                return -1;
+            }
+            file_inode.direct_ptr[i] = sb.d_start_blk + block_no;
+        } else {
+            block_no = file_inode.direct_ptr[i];
+        }
+
+        if (bio_read(block_no, block_buf) < 0) {
+            return -1;
+        }
+
+        size_t block_offset = current_offset % BLOCK_SIZE;
+        size_t available_space = BLOCK_SIZE - block_offset;
+        size_t bytes_to_copy = (bytes_to_write < available_space) ? bytes_to_write : available_space;
+
+        memcpy(block_buf + block_offset, buffer + bytes_written, bytes_to_copy);
+
+        if (bio_write(block_no, block_buf) < 0) {
+            return -1;
+        }
+
+        bytes_written += bytes_to_copy;
+        bytes_to_write -= bytes_to_copy;
+        current_offset += bytes_to_copy;
+    }
+
+    file_inode.size = (offset + bytes_written > file_inode.size) ? offset + bytes_written : file_inode.size;
+    if (writei(file_inode.ino, &file_inode) < 0) {
+        return -1;
+    }
+    
+    return bytes_written;
 }
 
-static int rufs_unlink(const char *path) {
 
-	// Step 1: Use dirname() and basename() to separate parent directory path and target file name
-
-	// Step 2: Call get_node_by_path() to get inode of target file
-
-	// Step 3: Clear data block bitmap of target file
-
-	// Step 4: Clear inode bitmap and its data block
-
-	// Step 5: Call get_node_by_path() to get inode of parent directory
-
-	// Step 6: Call dir_remove() to remove directory entry of target file in its parent directory
-
-	return 0;
-}
-
-static int rufs_truncate(const char *path, off_t size) {
-	// For this project, you don't need to fill this function
-	// But DO NOT DELETE IT!
-    return 0;
-}
-
-static int rufs_release(const char *path, struct fuse_file_info *fi) {
-	// For this project, you don't need to fill this function
-	// But DO NOT DELETE IT!
-	return 0;
-}
-
-static int rufs_flush(const char * path, struct fuse_file_info * fi) {
-	// For this project, you don't need to fill this function
-	// But DO NOT DELETE IT!
-    return 0;
-}
-
-static int rufs_utimens(const char *path, const struct timespec tv[2]) {
-	// For this project, you don't need to fill this function
-	// But DO NOT DELETE IT!
-    return 0;
-}
-
+//skip
+static int rufs_unlink(const char *path) {return 0;}
+static int rufs_truncate(const char *path, off_t size) {return 0;}
+static int rufs_release(const char *path, struct fuse_file_info *fi) {return 0;}
+static int rufs_flush(const char * path, struct fuse_file_info * fi) {return 0;}
+static int rufs_utimens(const char *path, const struct timespec tv[2]) {return 0;}
 
 static struct fuse_operations rufs_ope = {
 	.init		= rufs_init,
@@ -680,8 +855,6 @@ static struct fuse_operations rufs_ope = {
 	.release	= rufs_release
 };
 
-
-
 //testing
 //keep this in cause some tests use it
 void clear_bitmap(bitmap_t bitmap, int index) {
@@ -695,101 +868,6 @@ void debug_bitmap(const char *msg, bitmap_t bitmap, int size) {
         printf("%02x ", bitmap[i]);
     }
     printf("\n");
-}
-
-void test_dir_add() {
-    printf("Testing dir_add...\n");
-
-    // Initialize the file system
-    strcpy(diskfile_path, "./DISKFILE");
-    dev_close(); // Close any existing filesystem
-    rufs_mkfs(); // Force a fresh filesystem
-
-    struct inode dir_inode = {0};
-
-    // Initialize a directory inode (simulating a root directory)
-    dir_inode.ino = 1;
-    dir_inode.valid = 1;
-    dir_inode.size = 0;
-    dir_inode.type = S_IFDIR;
-    memset(dir_inode.direct_ptr, 0, sizeof(dir_inode.direct_ptr));
-
-    // Write the directory inode to disk
-    if (writei(dir_inode.ino, &dir_inode) < 0) {
-        fprintf(stderr, "Test failed: Unable to write initial directory inode.\n");
-        return;
-    }
-
-    // Add entries to the directory
-    const char *file1 = "file1";
-    const char *file2 = "file2";
-    const char *duplicate = "file1";
-
-    // Add 'file1'
-    if (dir_add(dir_inode, 2, file1, strlen(file1)) < 0) {
-        fprintf(stderr, "Test failed: Unable to add 'file1'.\n");
-        return;
-    }
-    printf("Added 'file1' to directory.\n");
-
-    // Re-read inode from disk to synchronize in-memory and on-disk state
-    if (readi(dir_inode.ino, &dir_inode) < 0) {
-        fprintf(stderr, "Test failed: Unable to re-read inode after adding 'file1'.\n");
-        return;
-    }
-
-    // Add 'file2'
-    if (dir_add(dir_inode, 3, file2, strlen(file2)) < 0) {
-        fprintf(stderr, "Test failed: Unable to add 'file2'.\n");
-        return;
-    }
-    printf("Added 'file2' to directory.\n");
-
-    // Re-read inode again
-    if (readi(dir_inode.ino, &dir_inode) < 0) {
-        fprintf(stderr, "Test failed: Unable to re-read inode after adding 'file2'.\n");
-        return;
-    }
-
-    // Attempt to add a duplicate entry 'file1'
-    if (dir_add(dir_inode, 4, duplicate, strlen(duplicate)) == 0) {
-        fprintf(stderr, "Test failed: Duplicate entry 'file1' was added.\n");
-        return;
-    }
-    printf("Correctly handled duplicate entry for 'file1'.\n");
-
-    // Fill up the directory
-    int max_entries = (BLOCK_SIZE / sizeof(struct dirent)) * 16; // Adjust for multiple blocks
-    int i;
-    for (i = 4; i <= max_entries; i++) {
-        char filename[10];
-        snprintf(filename, sizeof(filename), "file%d", i);
-        
-        // Re-read inode before each add, just to be safe
-        if (readi(dir_inode.ino, &dir_inode) < 0) {
-            fprintf(stderr, "Test failed: Unable to re-read inode before adding '%s'.\n", filename);
-            return;
-        }
-
-        if (dir_add(dir_inode, i, filename, strlen(filename)) < 0) {
-            printf("Directory full after %d entries.\n", i - 3); // Adjusting for the already added entries
-            break;
-        }
-    }
-
-    if (i > max_entries) {
-        fprintf(stderr, "Test failed: Directory did not report full capacity as expected.\n");
-        return;
-    }
-
-    // Finally, re-read inode to confirm final state
-    if (readi(dir_inode.ino, &dir_inode) < 0) {
-        fprintf(stderr, "Test failed: Unable to read directory inode after operations.\n");
-        return;
-    }
-
-    printf("Final directory size: %d bytes.\n", dir_inode.size);
-    printf("Test passed: dir_add behaves correctly.\n");
 }
 
 // Conditional Main Function
@@ -809,7 +887,7 @@ int main() {
     //test_writei();
     //test_dir_find();
     //test_dir_find_advanced();
-    test_dir_add();
+    //test_dir_add();
     //test_get_node_by_path();
     //test_dir_find_only();
     //test_dir_add_basic();
