@@ -870,6 +870,16 @@ void debug_bitmap(const char *msg, bitmap_t bitmap, int size) {
     printf("\n");
 }
 
+//helper for tests. used in each test to initialize file sys
+void initialize_test_fs() {
+    strcpy(diskfile_path, "./DISKFILE");
+    dev_close(); // Close any existing filesystem
+    rufs_mkfs(); // Create a fresh filesystem
+}
+
+
+
+
 // Conditional Main Function
 // when testing, run:
 // make CFLAGS="-D_FILE_OFFSET_BITS=64 -DTEST_MODE"

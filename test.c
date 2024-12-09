@@ -857,3 +857,164 @@ void test_dir_add_duplicate() {
 }
 
 //PASSED
+
+//TESTS FOR VIGNESH RUFS METHODS:
+
+void test_rufs_destroy() {
+    printf("Testing rufs_destroy...\n");
+
+    // Initialize the file system
+    initialize_test_fs();
+
+    // Simulate operations
+    struct inode test_inode;
+    if (get_avail_ino() < 0) {
+        fprintf(stderr, "Test failed: Unable to allocate inode.\n");
+        return;
+    }
+
+    // Call rufs_destroy
+    rufs_destroy(NULL);
+
+    // Check if bitmaps are cleared
+    char buf[BLOCK_SIZE];
+    bio_read(sb.i_bitmap_blk, buf);
+    for (int i = 0; i < MAX_INUM / 8; i++) {
+        if (buf[i] != 0) {
+            fprintf(stderr, "Test failed: Inode bitmap not cleared.\n");
+            return;
+        }
+    }
+    bio_read(sb.d_bitmap_blk, buf);
+    for (int i = 0; i < MAX_DNUM / 8; i++) {
+        if (buf[i] != 0) {
+            fprintf(stderr, "Test failed: Data block bitmap not cleared.\n");
+            return;
+        }
+    }
+
+    printf("Test passed: rufs_destroy cleared resources successfully.\n");
+}
+
+void test_rufs_getattr() {
+    printf("Testing rufs_getattr...\n");
+
+    initialize_test_fs();
+
+    struct stat stbuf;
+    if (rufs_getattr("/", &stbuf) < 0) {
+        fprintf(stderr, "Test failed: Unable to get attributes for root.\n");
+        return;
+    }
+
+    printf("Root attributes: ino=%ld, mode=%o, size=%ld\n", stbuf.st_ino, stbuf.st_mode, stbuf.st_size);
+
+    printf("Test passed: rufs_getattr successfully fetched attributes.\n");
+}
+
+void test_rufs_opendir() {
+    printf("Testing rufs_opendir...\n");
+
+    initialize_test_fs();
+
+    if (rufs_opendir("/", NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to open root directory.\n");
+        return;
+    }
+
+    printf("Test passed: rufs_opendir opened root directory successfully.\n");
+}
+
+void test_rufs_readdir() {
+    printf("Testing rufs_readdir...\n");
+
+    initialize_test_fs();
+
+    // Create a directory
+    if (rufs_mkdir("/testdir", 0755) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir.\n");
+        return;
+    }
+
+    // Read the root directory
+    char buf[1024];
+    if (rufs_readdir("/", buf, NULL, 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to read root directory.\n");
+        return;
+    }
+
+    printf("Test passed: rufs_readdir read root directory successfully.\n");
+}
+
+void test_rufs_mkdir() {
+    printf("Testing rufs_mkdir...\n");
+
+    initialize_test_fs();
+
+    if (rufs_mkdir("/testdir", 0755) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir.\n");
+        return;
+    }
+
+    struct inode dir_inode;
+    if (get_node_by_path("/testdir", 0, &dir_inode) < 0) {
+        fprintf(stderr, "Test failed: /testdir not found after creation.\n");
+        return;
+    }
+
+    printf("Test passed: rufs_mkdir created directory successfully.\n");
+}
+
+void test_rufs_open() {
+    printf("Testing rufs_open...\n");
+
+    initialize_test_fs();
+
+    // Create a file
+    if (rufs_create("/testfile", 0644, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testfile.\n");
+        return;
+    }
+
+    if (rufs_open("/testfile", NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to open /testfile.\n");
+        return;
+    }
+
+    printf("Test passed: rufs_open opened file successfully.\n");
+}
+
+void test_rufs_read_write() {
+    printf("Testing rufs_read and rufs_write...\n");
+
+    initialize_test_fs();
+
+    // Create a file
+    if (rufs_create("/testfile", 0644, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testfile.\n");
+        return;
+    }
+
+    // Write to the file
+    const char *data = "Hello, World!";
+    if (rufs_write("/testfile", data, strlen(data), 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to write to /testfile.\n");
+        return;
+    }
+
+    // Read back the file
+    char buffer[64];
+    memset(buffer, 0, sizeof(buffer));
+    if (rufs_read("/testfile", buffer, strlen(data), 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to read from /testfile.\n");
+        return;
+    }
+
+    if (strcmp(buffer, data) != 0) {
+        fprintf(stderr, "Test failed: Data mismatch. Expected '%s', got '%s'.\n", data, buffer);
+        return;
+    }
+
+    printf("Test passed: rufs_read and rufs_write worked successfully.\n");
+}
+
