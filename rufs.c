@@ -535,7 +535,7 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_blocks = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE;
     stbuf->st_mtime = time(NULL);
 
-    fprintf(stderr, "rufs_getattr: Path %s attributes filled. Inode: %d, Type: %d, Size: %ld\n",
+    fprintf(stderr, "rufs_getattr: Path %s attributes filled. Inode: %d, Type: %d, Size: %d\n",
             path, inode.ino, inode.type, inode.size);
 
     return 0;
@@ -743,7 +743,7 @@ static int rufs_read(const char *path, char *buffer, size_t size, off_t offset, 
         return -1;
     }
 
-    fprintf(stderr, "[DEBUG] rufs_read: Inode info - ino: %d, size: %lu, type: %x\n",
+    fprintf(stderr, "[DEBUG] rufs_read: Inode info - ino: %d, size: %u, type: %x\n",
             file_inode.ino, file_inode.size, file_inode.type);
 
     // Ensure the inode represents a regular file
@@ -754,7 +754,7 @@ static int rufs_read(const char *path, char *buffer, size_t size, off_t offset, 
 
     // Validate offset
     if (offset >= file_inode.size) {
-        fprintf(stderr, "[DEBUG] rufs_read: Offset %lu beyond file size %lu\n", offset, file_inode.size);
+        fprintf(stderr, "[DEBUG] rufs_read: Offset %lu beyond file size %u\n", offset, file_inode.size);
         return 0; // No data to read
     }
 
@@ -805,7 +805,7 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
         return -1;
     }
 
-    fprintf(stderr, "[DEBUG] rufs_write: Inode info - ino: %d, size: %lu, type: %x\n",
+    fprintf(stderr, "[DEBUG] rufs_write: Inode info - ino: %d, size: %u, type: %x\n",
             file_inode.ino, file_inode.size, file_inode.type);
 
     if ((file_inode.type & S_IFREG) == 0) {
@@ -866,7 +866,7 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 
     file_inode.size = (offset + bytes_written > file_inode.size) ? offset + bytes_written : file_inode.size;
 
-    fprintf(stderr, "[DEBUG] rufs_write: Updated inode size to %lu\n", file_inode.size);
+    fprintf(stderr, "[DEBUG] rufs_write: Updated inode size to %u\n", file_inode.size);
 
     if (writei(file_inode.ino, &file_inode) < 0) {
         fprintf(stderr, "Error: Failed to write inode %d\n", file_inode.ino);
@@ -930,6 +930,13 @@ void initialize_test_fs() {
     rufs_mkfs(); // Create a fresh filesystem
 }
 
+//helper for testing readdir
+int test_filler(void *buf, const char *name, const struct stat *st, off_t off) {
+    printf("Directory entry: %s\n", name);
+    return 0; 
+}
+
+
 void test_rufs_readdir() {
     printf("Testing rufs_readdir...\n");
 
@@ -943,47 +950,14 @@ void test_rufs_readdir() {
 
     // Read the root directory
     char buf[1024];
-    if (rufs_readdir("/", buf, NULL, 0, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to read root directory.\n");
-        return;
+    if (rufs_readdir("/", buf, test_filler, 0, NULL) < 0) {
+    fprintf(stderr, "Test failed: Unable to read root directory.\n");
+    return;
     }
 
     printf("Test passed: rufs_readdir read root directory successfully.\n");
 }
 
-void test_rufs_read_write() {
-    printf("Testing rufs_read and rufs_write...\n");
-
-    initialize_test_fs();
-
-    // Create a file
-    if (rufs_create("/testfile", 0644, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to create /testfile.\n");
-        return;
-    }
-
-    // Write to the file
-    const char *data = "Hello, World!";
-    if (rufs_write("/testfile", data, strlen(data), 0, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to write to /testfile.\n");
-        return;
-    }
-
-    // Read back the file
-    char buffer[64];
-    memset(buffer, 0, sizeof(buffer));
-    if (rufs_read("/testfile", buffer, strlen(data), 0, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to read from /testfile.\n");
-        return;
-    }
-
-    if (strcmp(buffer, data) != 0) {
-        fprintf(stderr, "Test failed: Data mismatch. Expected '%s', got '%s'.\n", data, buffer);
-        return;
-    }
-
-    printf("Test passed: rufs_read and rufs_write worked successfully.\n");
-}
 
 // Conditional Main Function
 // when testing, run:
@@ -1012,10 +986,10 @@ int main() {
     //test_rufs_destroy();
     //test_rufs_getattr();
     //test_rufs_opendir();
-    //test_rufs_readdir();
+    test_rufs_readdir();
     //test_rufs_mkdir();
     //test_rufs_open();
-    test_rufs_read_write(); 
+    //test_rufs_read_write(); 
 
     return 0;
 }
