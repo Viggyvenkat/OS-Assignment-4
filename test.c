@@ -925,6 +925,13 @@ void test_rufs_opendir() {
     printf("Test passed: rufs_opendir opened root directory successfully.\n");
 }
 
+//helper for testing readdir
+int test_filler(void *buf, const char *name, const struct stat *st, off_t off) {
+    printf("Directory entry: %s\n", name);
+    return 0; 
+}
+
+
 void test_rufs_readdir() {
     printf("Testing rufs_readdir...\n");
 
@@ -938,13 +945,14 @@ void test_rufs_readdir() {
 
     // Read the root directory
     char buf[1024];
-    if (rufs_readdir("/", buf, NULL, 0, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to read root directory.\n");
-        return;
+    if (rufs_readdir("/", buf, test_filler, 0, NULL) < 0) {
+    fprintf(stderr, "Test failed: Unable to read root directory.\n");
+    return;
     }
 
     printf("Test passed: rufs_readdir read root directory successfully.\n");
 }
+
 
 void test_rufs_mkdir() {
     printf("Testing rufs_mkdir...\n");

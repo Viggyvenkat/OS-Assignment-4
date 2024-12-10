@@ -563,43 +563,45 @@ static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
     struct inode dir_inode;
 
-    printf("Resolving path: %s\n", path);
-
     // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &dir_inode) < 0) {
         fprintf(stderr, "Error: Path not found\n");
         return -ENOENT;
     }
 
+    // Check if the inode is indeed a directory
     if ((dir_inode.type & S_IFDIR) == 0) {
-        fprintf(stderr, "Error: Not a directory\n");
         return -ENOTDIR;
     }
 
-    // Step 2: Read directory entries from its data blocks
+    // Adding "." and ".." entries to mimic Unix directory behavior
+    filler(buffer, ".", NULL, 0);
+    filler(buffer, "..", NULL, 0);
+
+    //Read directory entries from its data blocks, and copy them to filler
+    // Iterate over direct pointers
     for (int i = 0; i < 16 && dir_inode.direct_ptr[i] != 0; i++) {
-        char block[BLOCK_SIZE];
-        memset(block, 0, BLOCK_SIZE);
+        char block_buf[BLOCK_SIZE];
 
         printf("Reading block %d\n", dir_inode.direct_ptr[i]);
 
-        if (bio_read(dir_inode.direct_ptr[i], block) < 0) {
+        // Read the block containing directory entries
+        if (bio_read(dir_inode.direct_ptr[i], block_buf) < 0) {
             fprintf(stderr, "Error reading block %d\n", dir_inode.direct_ptr[i]);
-            return -EIO;
+            return -EIO; 
         }
 
-        struct dirent *entry = (struct dirent *)block;
+        struct dirent *entry = (struct dirent *)block_buf;
         int entries_per_block = BLOCK_SIZE / sizeof(struct dirent);
 
+        // Iterate through the directory entries in this block
         for (int j = 0; j < entries_per_block; j++) {
-            if (entry[j].valid) {
+            if (entry[j].valid == 1) {
                 printf("Found valid entry: %s\n", entry[j].name);
-
-                // Use the filler function to add the entry to the buffer
-                if (filler(buffer, entry[j].name, NULL, 0) != 0) {
-                    fprintf(stderr, "Error: Buffer overflow\n");
-                    return -ENOMEM;
-                }
+                // Add the entry name to the listing
+                // filler expects just the name and optionally a stat buffer.
+                // We can pass NULL for the stat buffer if not required.
+                filler(buffer, entry[j].name, NULL, 0);
             }
         }
     }
@@ -929,34 +931,83 @@ void initialize_test_fs() {
     dev_close(); // Close any existing filesystem
     rufs_mkfs(); // Create a fresh filesystem
 }
+// A simple mock filler that stores directory names in a global array
+#define MAX_TEST_ENTRIES 128
+static const char *dir_entries[MAX_TEST_ENTRIES];
+static int entry_count = 0;
 
-//helper for testing readdir
 int test_filler(void *buf, const char *name, const struct stat *st, off_t off) {
-    printf("Directory entry: %s\n", name);
-    return 0; 
+    if (entry_count < MAX_TEST_ENTRIES) {
+        dir_entries[entry_count++] = strdup(name); // copy entry name
+    }
+    return 0;
 }
 
+void test_rufs_readdir_multiple_entries() {
+    printf("Testing rufs_readdir with multiple entries...\n");
 
-void test_rufs_readdir() {
-    printf("Testing rufs_readdir...\n");
-
+    // Initialize a fresh filesystem
     initialize_test_fs();
 
-    // Create a directory
+    // Create the test directory
     if (rufs_mkdir("/testdir", 0755) < 0) {
         fprintf(stderr, "Test failed: Unable to create /testdir.\n");
         return;
     }
 
-    // Read the root directory
-    char buf[1024];
-    if (rufs_readdir("/", buf, test_filler, 0, NULL) < 0) {
-    fprintf(stderr, "Test failed: Unable to read root directory.\n");
-    return;
+    // Add files inside /testdir
+    if (rufs_create("/testdir/file1", 0644, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir/file1.\n");
+        return;
+    }
+    if (rufs_create("/testdir/file2", 0644, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir/file2.\n");
+        return;
     }
 
-    printf("Test passed: rufs_readdir read root directory successfully.\n");
+    // Add a subdirectory inside /testdir
+    if (rufs_mkdir("/testdir/subdir", 0755) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir/subdir.\n");
+        return;
+    }
+
+    // Clear the global entries list
+    for (int i = 0; i < MAX_TEST_ENTRIES; i++) {
+        dir_entries[i] = NULL;
+    }
+    entry_count = 0;
+
+    // Read the /testdir directory
+    char dummy_buf[1024]; 
+    if (rufs_readdir("/testdir", dummy_buf, test_filler, 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to read /testdir.\n");
+        return;
+    }
+
+    // Verify the expected entries: ".", "..", "file1", "file2", "subdir"
+    int found_dot = 0, found_dotdot = 0, found_file1 = 0, found_file2 = 0, found_subdir = 0;
+
+    for (int i = 0; i < entry_count; i++) {
+        if (strcmp(dir_entries[i], ".") == 0) found_dot = 1;
+        else if (strcmp(dir_entries[i], "..") == 0) found_dotdot = 1;
+        else if (strcmp(dir_entries[i], "file1") == 0) found_file1 = 1;
+        else if (strcmp(dir_entries[i], "file2") == 0) found_file2 = 1;
+        else if (strcmp(dir_entries[i], "subdir") == 0) found_subdir = 1;
+    }
+
+    if (!found_dot || !found_dotdot || !found_file1 || !found_file2 || !found_subdir) {
+        fprintf(stderr, "Test failed: Not all expected entries were found in /testdir.\n");
+        fprintf(stderr, "Found entries:\n");
+        for (int i = 0; i < entry_count; i++) {
+            fprintf(stderr, "%s\n", dir_entries[i]);
+        }
+        return;
+    }
+
+    printf("Test passed: rufs_readdir returned all expected entries for /testdir.\n");
 }
+
+
 
 
 // Conditional Main Function
@@ -986,10 +1037,11 @@ int main() {
     //test_rufs_destroy();
     //test_rufs_getattr();
     //test_rufs_opendir();
-    test_rufs_readdir();
+    //test_rufs_readdir();
     //test_rufs_mkdir();
     //test_rufs_open();
     //test_rufs_read_write(); 
+    test_rufs_readdir_multiple_entries();
 
     return 0;
 }
