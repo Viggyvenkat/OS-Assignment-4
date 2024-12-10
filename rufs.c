@@ -563,20 +563,29 @@ static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
     struct inode dir_inode;
 
+    printf("Resolving path: %s\n", path);
+
     // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &dir_inode) < 0) {
-        return -1;
+        fprintf(stderr, "Error: Path not found\n");
+        return -ENOENT;
     }
 
     if ((dir_inode.type & S_IFDIR) == 0) {
-        return -1;
+        fprintf(stderr, "Error: Not a directory\n");
+        return -ENOTDIR;
     }
 
     // Step 2: Read directory entries from its data blocks
     for (int i = 0; i < 16 && dir_inode.direct_ptr[i] != 0; i++) {
         char block[BLOCK_SIZE];
+        memset(block, 0, BLOCK_SIZE);
+
+        printf("Reading block %d\n", dir_inode.direct_ptr[i]);
+
         if (bio_read(dir_inode.direct_ptr[i], block) < 0) {
-            return -1;
+            fprintf(stderr, "Error reading block %d\n", dir_inode.direct_ptr[i]);
+            return -EIO;
         }
 
         struct dirent *entry = (struct dirent *)block;
@@ -584,15 +593,21 @@ static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
 
         for (int j = 0; j < entries_per_block; j++) {
             if (entry[j].valid) {
+                printf("Found valid entry: %s\n", entry[j].name);
+
+                // Use the filler function to add the entry to the buffer
                 if (filler(buffer, entry[j].name, NULL, 0) != 0) {
-                    return -1;
+                    fprintf(stderr, "Error: Buffer overflow\n");
+                    return -ENOMEM;
                 }
             }
         }
     }
 
+    printf("readdir completed successfully\n");
     return 0;
 }
+
 
 
 static int rufs_mkdir(const char *path, mode_t mode) {
@@ -724,27 +739,42 @@ static int rufs_read(const char *path, char *buffer, size_t size, off_t offset, 
 
     // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &file_inode) < 0) {
+        fprintf(stderr, "Error: Invalid path %s\n", path);
         return -1;
     }
 
+    fprintf(stderr, "[DEBUG] rufs_read: Inode info - ino: %d, size: %lu, type: %x\n",
+            file_inode.ino, file_inode.size, file_inode.type);
+
     // Ensure the inode represents a regular file
     if ((file_inode.type & S_IFREG) == 0) {
+        fprintf(stderr, "Error: Path %s is not a regular file\n", path);
         return -1;
+    }
+
+    // Validate offset
+    if (offset >= file_inode.size) {
+        fprintf(stderr, "[DEBUG] rufs_read: Offset %lu beyond file size %lu\n", offset, file_inode.size);
+        return 0; // No data to read
     }
 
     // Step 2: Based on size and offset, read its data blocks from disk
     size_t bytes_read = 0;
-    size_t bytes_to_read = size; 
-    off_t current_offset = offset; 
+    size_t bytes_to_read = size;
+    off_t current_offset = offset;
     char block_buf[BLOCK_SIZE];
 
     for (int i = 0; i < 16 && bytes_to_read > 0 && current_offset < file_inode.size; i++) {
         if (file_inode.direct_ptr[i] == 0) {
+            fprintf(stderr, "[DEBUG] rufs_read: Direct pointer %d is 0, stopping read.\n", i);
             break;
         }
 
         int block_no = file_inode.direct_ptr[i];
+        fprintf(stderr, "[DEBUG] rufs_read: Reading block %d for direct pointer %d\n", block_no, i);
+
         if (bio_read(block_no, block_buf) < 0) {
+            fprintf(stderr, "Error: Failed to read block %d\n", block_no);
             return -1;
         }
 
@@ -753,35 +783,44 @@ static int rufs_read(const char *path, char *buffer, size_t size, off_t offset, 
         size_t bytes_to_copy = (bytes_to_read < available_bytes) ? bytes_to_read : available_bytes;
 
         memcpy(buffer + bytes_read, block_buf + block_offset, bytes_to_copy);
+
+        fprintf(stderr, "[DEBUG] rufs_read: Copied %lu bytes from block %d at offset %lu\n",
+                bytes_to_copy, block_no, block_offset);
+
         bytes_read += bytes_to_copy;
         bytes_to_read -= bytes_to_copy;
         current_offset += bytes_to_copy;
     }
 
-    // Step 3: Copy the correct amount of data from offset to buffer
+    // Step 3: Return the number of bytes read
+    fprintf(stderr, "[DEBUG] rufs_read: Total bytes read %lu\n", bytes_read);
     return bytes_read;
 }
-
 
 static int rufs_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *fi) {
     struct inode file_inode;
 
     if (get_node_by_path(path, 0, &file_inode) < 0) {
+        fprintf(stderr, "Error: Invalid path %s\n", path);
         return -1;
     }
 
+    fprintf(stderr, "[DEBUG] rufs_write: Inode info - ino: %d, size: %lu, type: %x\n",
+            file_inode.ino, file_inode.size, file_inode.type);
+
     if ((file_inode.type & S_IFREG) == 0) {
-        return -1; 
+        fprintf(stderr, "Error: Path %s is not a regular file\n", path);
+        return -1;
     }
 
-    size_t bytes_written = 0;  
-    size_t bytes_to_write = size; 
-    off_t current_offset = offset; 
+    size_t bytes_written = 0;
+    size_t bytes_to_write = size;
+    off_t current_offset = offset;
     char block_buf[BLOCK_SIZE];
 
     for (int i = 0; i < 16 && bytes_to_write > 0; i++) {
         int block_no;
-        
+
         if (current_offset >= BLOCK_SIZE) {
             current_offset -= BLOCK_SIZE;
             continue;
@@ -790,14 +829,19 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
         if (file_inode.direct_ptr[i] == 0) {
             block_no = get_avail_blkno();
             if (block_no < 0) {
+                fprintf(stderr, "Error: No available blocks for writing.\n");
                 return -1;
             }
-            file_inode.direct_ptr[i] = sb.d_start_blk + block_no;
+            file_inode.direct_ptr[i] = block_no;
+            fprintf(stderr, "[DEBUG] rufs_write: Allocated new block %d for direct pointer %d\n", block_no, i);
         } else {
             block_no = file_inode.direct_ptr[i];
         }
 
+        fprintf(stderr, "[DEBUG] rufs_write: Writing to block %d for direct pointer %d\n", block_no, i);
+
         if (bio_read(block_no, block_buf) < 0) {
+            fprintf(stderr, "Error: Failed to read block %d before writing\n", block_no);
             return -1;
         }
 
@@ -807,7 +851,11 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 
         memcpy(block_buf + block_offset, buffer + bytes_written, bytes_to_copy);
 
+        fprintf(stderr, "[DEBUG] rufs_write: Copied %lu bytes to block %d at offset %lu\n",
+                bytes_to_copy, block_no, block_offset);
+
         if (bio_write(block_no, block_buf) < 0) {
+            fprintf(stderr, "Error: Failed to write block %d\n", block_no);
             return -1;
         }
 
@@ -817,10 +865,15 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
     }
 
     file_inode.size = (offset + bytes_written > file_inode.size) ? offset + bytes_written : file_inode.size;
+
+    fprintf(stderr, "[DEBUG] rufs_write: Updated inode size to %lu\n", file_inode.size);
+
     if (writei(file_inode.ino, &file_inode) < 0) {
+        fprintf(stderr, "Error: Failed to write inode %d\n", file_inode.ino);
         return -1;
     }
-    
+
+    fprintf(stderr, "[DEBUG] rufs_write: Total bytes written %lu\n", bytes_written);
     return bytes_written;
 }
 
@@ -877,8 +930,60 @@ void initialize_test_fs() {
     rufs_mkfs(); // Create a fresh filesystem
 }
 
+void test_rufs_readdir() {
+    printf("Testing rufs_readdir...\n");
 
+    initialize_test_fs();
 
+    // Create a directory
+    if (rufs_mkdir("/testdir", 0755) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testdir.\n");
+        return;
+    }
+
+    // Read the root directory
+    char buf[1024];
+    if (rufs_readdir("/", buf, NULL, 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to read root directory.\n");
+        return;
+    }
+
+    printf("Test passed: rufs_readdir read root directory successfully.\n");
+}
+
+void test_rufs_read_write() {
+    printf("Testing rufs_read and rufs_write...\n");
+
+    initialize_test_fs();
+
+    // Create a file
+    if (rufs_create("/testfile", 0644, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to create /testfile.\n");
+        return;
+    }
+
+    // Write to the file
+    const char *data = "Hello, World!";
+    if (rufs_write("/testfile", data, strlen(data), 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to write to /testfile.\n");
+        return;
+    }
+
+    // Read back the file
+    char buffer[64];
+    memset(buffer, 0, sizeof(buffer));
+    if (rufs_read("/testfile", buffer, strlen(data), 0, NULL) < 0) {
+        fprintf(stderr, "Test failed: Unable to read from /testfile.\n");
+        return;
+    }
+
+    if (strcmp(buffer, data) != 0) {
+        fprintf(stderr, "Test failed: Data mismatch. Expected '%s', got '%s'.\n", data, buffer);
+        return;
+    }
+
+    printf("Test passed: rufs_read and rufs_write worked successfully.\n");
+}
 
 // Conditional Main Function
 // when testing, run:
@@ -903,6 +1008,15 @@ int main() {
     //test_dir_add_basic();
     //test_dir_add_multiple();
     //test_dir_add_duplicate();
+    //test_rufs_destroy();
+    //test_rufs_destroy();
+    //test_rufs_getattr();
+    //test_rufs_opendir();
+    //test_rufs_readdir();
+    //test_rufs_mkdir();
+    //test_rufs_open();
+    test_rufs_read_write(); 
+
     return 0;
 }
 #else
