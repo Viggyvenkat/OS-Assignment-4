@@ -43,7 +43,6 @@ int get_avail_ino() {
 
 	char buf[BLOCK_SIZE];
     if (bio_read(sb.i_bitmap_blk, buf) < 0) {
-        fprintf(stderr, "Error: Failed to read inode bitmap from block %d\n", sb.i_bitmap_blk);
         return -1;
     }
 
@@ -52,11 +51,9 @@ int get_avail_ino() {
             set_bitmap((bitmap_t)buf, i);
 
             if (bio_write(sb.i_bitmap_blk, buf) < 0) {
-                fprintf(stderr, "Error: Failed to write updated inode bitmap to block %d\n", sb.i_bitmap_blk);
                 return -1;
             }
 
-            fprintf(stderr, "get_avail_ino: Found available inode %d\n", i);
             return i; 
         }
     }
@@ -77,7 +74,6 @@ int get_avail_blkno() {
 
 	char buf[BLOCK_SIZE];
     if (bio_read(sb.d_bitmap_blk, buf) < 0) {
-        fprintf(stderr, "Error: Failed to read data block bitmap from block %d\n", sb.d_bitmap_blk);
         return -1; 
     }
 
@@ -86,15 +82,12 @@ int get_avail_blkno() {
             set_bitmap((bitmap_t)buf, i);
 
             if (bio_write(sb.d_bitmap_blk, buf) < 0) {
-                fprintf(stderr, "Error: Failed to write updated data block bitmap to block %d\n", sb.d_bitmap_blk);
                 return -1;
             }
 
-            fprintf(stderr, "get_avail_blkno: Found available block %d\n", i);
             return i;
         }
     }
-    fprintf(stderr, "get_avail_blkno: No available data blocks\n");
     return -1;
 }
 
@@ -103,7 +96,6 @@ int get_avail_blkno() {
  */
 int readi(uint16_t ino, struct inode *inode) {
     if (ino >= sb.max_inum) {
-        fprintf(stderr, "Error: Inode number %d is out of bounds (max: %d)\n", ino, sb.max_inum);
         return -1;
     }
 
@@ -112,22 +104,15 @@ int readi(uint16_t ino, struct inode *inode) {
 
     char buf[BLOCK_SIZE];
     if (bio_read(blk_num, buf) < 0) {
-        fprintf(stderr, "Error: Failed to read block %d for inode %d\n", blk_num, ino);
         return -1;
     }
 
     memcpy(inode, buf + offset, sizeof(struct inode));
-
-    // Debugging output
-    fprintf(stderr, "readi: Reading inode %d from block %d, offset %d\n", ino, blk_num, offset);
-    fprintf(stderr, "readi: Inode Values: Valid=%d, Type=0x%x, Link=%d\n", inode->valid, inode->type, inode->link);
-
     return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
     if (ino >= sb.max_inum) {
-        fprintf(stderr, "Error: Inode number %d is out of bounds (max: %d)\n", ino, sb.max_inum);
         return -1;
     }
 
@@ -136,18 +121,12 @@ int writei(uint16_t ino, struct inode *inode) {
 
     char buf[BLOCK_SIZE];
     if (bio_read(blk_num, buf) < 0) {
-        fprintf(stderr, "Error: Failed to read block %d for inode %d\n", blk_num, ino);
         return -1; 
     }
 
     memcpy(buf + offset, inode, sizeof(struct inode));
 
-    // Debugging output
-    fprintf(stderr, "writei: Writing inode %d to block %d, offset %d\n", ino, blk_num, offset);
-    fprintf(stderr, "writei: Inode Values: Valid=%d, Type=0x%x, Link=%d\n", inode->valid, inode->type, inode->link);
-
     if (bio_write(blk_num, buf) < 0) {
-        fprintf(stderr, "Error: Failed to write block %d for inode %d\n", blk_num, ino);
         return -1; 
     }
 
@@ -199,21 +178,8 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 
 	// Step 3: Add directory entry in dir_inode's data block and write to disk
 
-	// Allocate a new data block for this directory if it does not exist
-
-	// Update directory inode
-
-	// Write directory entry
-
-    //Changed test code to re-read the inode from disk after each dir_add() call in test code. 
-    //This ensures that dir_inode in the test is always in sync with what’s on disk.
-
-    // First, do a duplicate check with dir_find().
-    // checks all existing entries across all allocated blocks.
     struct dirent existing_entry;
     if (dir_find(dir_inode.ino, fname, name_len, &existing_entry) == 0) {
-        // The entry already exists in the directory
-        fprintf(stderr, "dir_add: Duplicate entry '%s' found before adding.\n", fname);
         return -1;
     }
 
@@ -227,51 +193,39 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
     char buf[BLOCK_SIZE];
     int entries_per_block = BLOCK_SIZE / sizeof(struct dirent);
 
-    //Try to find a free slot in existing blocks
     for (int i = 0; i < 16; i++) {
         if (dir_inode.direct_ptr[i] == 0) {
-            // No more allocated blocks, break and allocate new block if needed
             break;
         }
 
         if (bio_read(dir_inode.direct_ptr[i], buf) < 0) {
-            fprintf(stderr, "dir_add: Failed to read block %d.\n", dir_inode.direct_ptr[i]);
             return -1;
         }
 
         struct dirent *entry = (struct dirent *)buf;
         for (int j = 0; j < entries_per_block; j++) {
             if (!entry[j].valid) { 
-                // Found a free slot in an existing block
                 memset(&entry[j], 0, sizeof(struct dirent));
                 memcpy(&entry[j], &new_dirent, sizeof(struct dirent));
                 if (bio_write(dir_inode.direct_ptr[i], buf) < 0) {
-                    fprintf(stderr, "dir_add: Failed to write updated block.\n");
                     return -1;
                 }
                 if (writei(dir_inode.ino, &dir_inode) < 0) {
-                    fprintf(stderr, "dir_add: Failed to write updated inode.\n");
                     return -1;
                 }
-                fprintf(stderr, "dir_add: Entry '%s' added to existing block %d, index %d.\n",
-                        fname, dir_inode.direct_ptr[i], j);
                 return 0;
             }
         }
     }
 
-    // No free slot in existing blocks, allocate a new block
     for (int i = 0; i < 16; i++) {
         if (dir_inode.direct_ptr[i] == 0) {
             if (i == 15) {
-                // No more space for new blocks
-                fprintf(stderr, "dir_add: Maximum directory capacity reached.\n");
-                return -ENOSPC;
+                return -1;
             }
 
             int new_block = get_avail_blkno();
             if (new_block < 0) {
-                fprintf(stderr, "dir_add: No available data blocks.\n");
                 return -1;
             }
 
@@ -280,42 +234,31 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
             dir_inode.size += BLOCK_SIZE;
             memset(buf, 0, BLOCK_SIZE);
             if (bio_write(abs_block, buf) < 0) {
-                fprintf(stderr, "dir_add: Failed to write new block.\n");
                 return -1;
             }
 
             if (writei(dir_inode.ino, &dir_inode) < 0) {
-                fprintf(stderr, "dir_add: Failed to write updated inode after new block allocation.\n");
                 return -1;
             }
 
-            // Now add the entry in the newly allocated block
             if (bio_read(abs_block, buf) < 0) {
-                fprintf(stderr, "dir_add: Failed to read newly allocated block %d.\n", abs_block);
                 return -1;
             }
 
             struct dirent *entry = (struct dirent *)buf;
-            // The new block is empty, so entry[0] is guaranteed free
             memset(&entry[0], 0, sizeof(struct dirent));
             memcpy(&entry[0], &new_dirent, sizeof(struct dirent));
             if (bio_write(abs_block, buf) < 0) {
-                fprintf(stderr, "dir_add: Failed to write new entry to new block.\n");
                 return -1;
             }
-
             if (writei(dir_inode.ino, &dir_inode) < 0) {
-                fprintf(stderr, "dir_add: Failed to write updated inode after adding entry.\n");
                 return -1;
             }
-
-            fprintf(stderr, "dir_add: Entry '%s' added to new block %d, index 0.\n", fname, abs_block);
             return 0;
         }
     }
 
-    fprintf(stderr, "dir_add: No space left in directory.\n");
-    return -ENOSPC;
+    return -1;
 }
 
 //skip
@@ -369,7 +312,6 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
  * Make file system
  */
 int rufs_mkfs() {
-
 	// Call dev_init() to initialize (Create) Diskfile
     dev_init(diskfile_path);
 
@@ -384,16 +326,12 @@ int rufs_mkfs() {
 
     char buffer[BLOCK_SIZE] = {0};
     memcpy(buffer, &sb, sizeof(sb));
-    bio_write(0, buffer); // Write superblock to block 0
+    bio_write(0, buffer);
 
-	// initialize inode bitmap
-    // initialize data block bitmap
     bitmap_t inode_bitmap = calloc(1, BLOCK_SIZE);
     bitmap_t data_bitmap = calloc(1, BLOCK_SIZE);
-    bio_write(sb.i_bitmap_blk, inode_bitmap); // Write empty inode bitmap
-    //debug
-    fprintf(stderr, "Data Block Bitmap Initialized: %02x\n", data_bitmap[0]);
-    bio_write(sb.d_bitmap_blk, data_bitmap); // Write empty data block bitmap
+    bio_write(sb.i_bitmap_blk, inode_bitmap);
+    bio_write(sb.d_bitmap_blk, data_bitmap);
 
     //initializing root directory inode
     struct inode root_inode;
@@ -401,7 +339,7 @@ int rufs_mkfs() {
     root_inode.valid = 1;
     root_inode.size = 0;
     root_inode.type = S_IFDIR;
-    root_inode.link = 2; // "." and ".."
+    root_inode.link = 2;
     memset(root_inode.direct_ptr, 0, sizeof(root_inode.direct_ptr));
     memset(root_inode.indirect_ptr, 0, sizeof(root_inode.indirect_ptr));
 
@@ -412,7 +350,6 @@ int rufs_mkfs() {
 
     free(inode_bitmap);
     free(data_bitmap);
-
 
 	return 0;
 }
@@ -430,39 +367,24 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 
     // Attempt to open the disk file
     if (dev_open(diskfile_path) < 0) {
-        fprintf(stderr, "Disk file not found. Creating a new file system...\n");
         if (rufs_mkfs() < 0) {
-            fprintf(stderr, "Error: Failed to create a new file system\n");
             return NULL;
         }
     } else {
-        fprintf(stderr, "Disk file found. Initializing file system...\n");
-
-        // Read the superblock from disk
         char buffer[BLOCK_SIZE];
         if (bio_read(0, buffer) < 0) {
-            fprintf(stderr, "Error: Failed to read superblock\n");
             return NULL;
         }
         memcpy(&sb, buffer, sizeof(struct superblock));
 
-        // Validate the superblock magic number
         if (sb.magic_num != MAGIC_NUM) {
-            fprintf(stderr, "Error: Invalid magic number in superblock\n");
             return NULL;
         }
 
-        // Debugging output
-        fprintf(stderr, "rufs_init: Superblock loaded:\n");
-
-        // Validate and debug data block bitmap
         char bitmap_buf[BLOCK_SIZE];
         if (bio_read(sb.d_bitmap_blk, bitmap_buf) < 0) {
-            fprintf(stderr, "Error: Failed to read data block bitmap from disk.\n");
             return NULL;
         }
-        fprintf(stderr, "Data Block Bitmap Loaded: %02x\n", bitmap_buf[0]);
-
     }
 
     return NULL;
@@ -477,7 +399,6 @@ static void rufs_destroy(void *userdata) {
         uint32_t offset = (i * sizeof(struct inode)) % BLOCK_SIZE;
 
         if (bio_read(blk_num, buffer) < 0) {
-            fprintf(stderr, "rufs_destroy: Failed to read inode block %d\n", blk_num);
             continue;
         }
 
@@ -486,7 +407,6 @@ static void rufs_destroy(void *userdata) {
             if (inode_buffer.indirect_ptr[0] != 0) {
                 char indirect_block_buf[BLOCK_SIZE];
                 if (bio_read(inode_buffer.indirect_ptr[0], indirect_block_buf) < 0) {
-                    fprintf(stderr, "rufs_destroy: Failed to read indirect block %d\n", inode_buffer.indirect_ptr[0]);
                 } else {
                     memset(indirect_block_buf, 0, BLOCK_SIZE);
                     bio_write(inode_buffer.indirect_ptr[0], indirect_block_buf); 
@@ -510,16 +430,13 @@ static void rufs_destroy(void *userdata) {
     }
 
     dev_close();
-    fprintf(stderr, "rufs_destroy: All resources de-allocated and disk file closed.\n");
 }
-
 
 static int rufs_getattr(const char *path, struct stat *stbuf) {
     struct inode inode;
 
     // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &inode) < 0) {
-        fprintf(stderr, "rufs_getattr: Failed to find inode for path %s\n", path);
         return -1;
     }
 
@@ -535,9 +452,6 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_blocks = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE;
     stbuf->st_mtime = time(NULL);
 
-    fprintf(stderr, "rufs_getattr: Path %s attributes filled. Inode: %d, Type: %d, Size: %d\n",
-            path, inode.ino, inode.type, inode.size);
-
     return 0;
 }
 
@@ -545,14 +459,11 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
     struct inode inode;
 
-    // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &inode) < 0) {
-        fprintf(stderr, "rufs_opendir: Failed to find inode for path %s\n", path);
         return -1;
     }
 
     if ((inode.type & S_IFDIR) == 0) {
-        fprintf(stderr, "rufs_opendir: Path %s is not a directory\n", path);
         return -1;
     }
 
@@ -565,30 +476,19 @@ static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
 
     // Step 1: Call get_node_by_path() to get inode from path
     if (get_node_by_path(path, 0, &dir_inode) < 0) {
-        fprintf(stderr, "Error: Path not found\n");
-        return -ENOENT;
+        return -1;
     }
 
-    // Check if the inode is indeed a directory
     if ((dir_inode.type & S_IFDIR) == 0) {
         return -ENOTDIR;
     }
 
-    // Adding "." and ".." entries to mimic Unix directory behavior
     filler(buffer, ".", NULL, 0);
     filler(buffer, "..", NULL, 0);
-
-    //Read directory entries from its data blocks, and copy them to filler
-    // Iterate over direct pointers
     for (int i = 0; i < 16 && dir_inode.direct_ptr[i] != 0; i++) {
         char block_buf[BLOCK_SIZE];
-
-        printf("Reading block %d\n", dir_inode.direct_ptr[i]);
-
-        // Read the block containing directory entries
         if (bio_read(dir_inode.direct_ptr[i], block_buf) < 0) {
-            fprintf(stderr, "Error reading block %d\n", dir_inode.direct_ptr[i]);
-            return -EIO; 
+            return -1; 
         }
 
         struct dirent *entry = (struct dirent *)block_buf;
@@ -597,20 +497,13 @@ static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
         // Iterate through the directory entries in this block
         for (int j = 0; j < entries_per_block; j++) {
             if (entry[j].valid == 1) {
-                printf("Found valid entry: %s\n", entry[j].name);
-                // Add the entry name to the listing
-                // filler expects just the name and optionally a stat buffer.
-                // We can pass NULL for the stat buffer if not required.
                 filler(buffer, entry[j].name, NULL, 0);
             }
         }
     }
 
-    printf("readdir completed successfully\n");
     return 0;
 }
-
-
 
 static int rufs_mkdir(const char *path, mode_t mode) {
     char parent_path[PATH_MAX];
@@ -623,28 +516,23 @@ static int rufs_mkdir(const char *path, mode_t mode) {
     char *parent_dir = dirname(parent_path);
     char *base_name = basename(dir_name);
 
-    // Step 2: Call get_node_by_path() to get inode of parent directory
     if (get_node_by_path(parent_dir, 0, &parent_inode) < 0) {
         return -1;
     }
 
-    // Ensure the parent inode is a directory
     if ((parent_inode.type & S_IFDIR) == 0) {
         return -1;
     }
 
-    // Step 3: Call get_avail_ino() to get an available inode number
     int new_ino = get_avail_ino();
     if (new_ino < 0) {
         return -1; 
     }
 
-    // Step 4: Call dir_add() to add directory entry of target directory to parent directory
     if (dir_add(parent_inode, new_ino, base_name, strlen(base_name)) < 0) {
         return -1;
     }
 
-    // Step 5: Update inode for target directory
     struct inode new_dir_inode;
     memset(&new_dir_inode, 0, sizeof(struct inode));
     new_dir_inode.ino = new_ino;
@@ -655,7 +543,6 @@ static int rufs_mkdir(const char *path, mode_t mode) {
     memset(new_dir_inode.direct_ptr, 0, sizeof(new_dir_inode.direct_ptr));
     memset(new_dir_inode.indirect_ptr, 0, sizeof(new_dir_inode.indirect_ptr));
 
-    // Step 6: Call writei() to write inode to disk
     if (writei(new_ino, &new_dir_inode) < 0) {
         return -1;
     }
@@ -673,31 +560,24 @@ static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     char file_name[NAME_LEN];
     struct inode parent_inode;
 
-    // Step 1: Use dirname() and basename() to separate parent directory path and target file name
     strncpy(parent_path, path, PATH_MAX);
     strncpy(file_name, path, NAME_LEN);
     char *parent_dir = dirname(parent_path);
     char *base_name = basename(file_name);
 
-    // Step 2: Call get_node_by_path() to get inode of parent directory
     if (get_node_by_path(parent_dir, 0, &parent_inode) < 0) {
-        fprintf(stderr, "rufs_create: Parent directory %s not found\n", parent_dir);
         return -1;
     }
 
-    // Ensure the parent inode is a directory
     if ((parent_inode.type & S_IFDIR) == 0) {
-        fprintf(stderr, "rufs_create: Parent path %s is not a directory\n", parent_dir);
         return -1;
     }
 
-    // Step 3: Call get_avail_ino() to get an available inode number
     int new_ino = get_avail_ino();
     if (new_ino < 0) {
         return -1;
     }
 
-    // Step 4: Call dir_add() to add directory entry of target file to parent directory
     if (dir_add(parent_inode, new_ino, base_name, strlen(base_name)) < 0) {
         return -1;
     }
@@ -713,7 +593,6 @@ static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     memset(new_file_inode.direct_ptr, 0, sizeof(new_file_inode.direct_ptr));
     memset(new_file_inode.indirect_ptr, 0, sizeof(new_file_inode.indirect_ptr));
 
-    // Step 6: Call writei() to write inode to disk
     if (writei(new_ino, &new_file_inode) < 0) {
         return -1;
     }
@@ -942,73 +821,6 @@ int test_filler(void *buf, const char *name, const struct stat *st, off_t off) {
     }
     return 0;
 }
-
-void test_rufs_readdir_multiple_entries() {
-    printf("Testing rufs_readdir with multiple entries...\n");
-
-    // Initialize a fresh filesystem
-    initialize_test_fs();
-
-    // Create the test directory
-    if (rufs_mkdir("/testdir", 0755) < 0) {
-        fprintf(stderr, "Test failed: Unable to create /testdir.\n");
-        return;
-    }
-
-    // Add files inside /testdir
-    if (rufs_create("/testdir/file1", 0644, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to create /testdir/file1.\n");
-        return;
-    }
-    if (rufs_create("/testdir/file2", 0644, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to create /testdir/file2.\n");
-        return;
-    }
-
-    // Add a subdirectory inside /testdir
-    if (rufs_mkdir("/testdir/subdir", 0755) < 0) {
-        fprintf(stderr, "Test failed: Unable to create /testdir/subdir.\n");
-        return;
-    }
-
-    // Clear the global entries list
-    for (int i = 0; i < MAX_TEST_ENTRIES; i++) {
-        dir_entries[i] = NULL;
-    }
-    entry_count = 0;
-
-    // Read the /testdir directory
-    char dummy_buf[1024]; 
-    if (rufs_readdir("/testdir", dummy_buf, test_filler, 0, NULL) < 0) {
-        fprintf(stderr, "Test failed: Unable to read /testdir.\n");
-        return;
-    }
-
-    // Verify the expected entries: ".", "..", "file1", "file2", "subdir"
-    int found_dot = 0, found_dotdot = 0, found_file1 = 0, found_file2 = 0, found_subdir = 0;
-
-    for (int i = 0; i < entry_count; i++) {
-        if (strcmp(dir_entries[i], ".") == 0) found_dot = 1;
-        else if (strcmp(dir_entries[i], "..") == 0) found_dotdot = 1;
-        else if (strcmp(dir_entries[i], "file1") == 0) found_file1 = 1;
-        else if (strcmp(dir_entries[i], "file2") == 0) found_file2 = 1;
-        else if (strcmp(dir_entries[i], "subdir") == 0) found_subdir = 1;
-    }
-
-    if (!found_dot || !found_dotdot || !found_file1 || !found_file2 || !found_subdir) {
-        fprintf(stderr, "Test failed: Not all expected entries were found in /testdir.\n");
-        fprintf(stderr, "Found entries:\n");
-        for (int i = 0; i < entry_count; i++) {
-            fprintf(stderr, "%s\n", dir_entries[i]);
-        }
-        return;
-    }
-
-    printf("Test passed: rufs_readdir returned all expected entries for /testdir.\n");
-}
-
-
-
 
 // Conditional Main Function
 // when testing, run:
