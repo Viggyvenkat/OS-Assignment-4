@@ -6,6 +6,9 @@
  *
  */
 
+//Divit Shetty (dps190) & Vignesh Venkat (vvv11)
+// Tested on iLab: kill
+
 #include <linux/limits.h>
 #include <sys/stat.h>
 #include <unistd.h>

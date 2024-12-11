@@ -5,6 +5,10 @@
  *
  */
 
+//Divit Shetty (dps190) & Vignesh Venkat (vvv11)
+// Tested on iLab: kill
+
+
 #define FUSE_USE_VERSION 26
 #define NAME_LEN 255
 
@@ -853,7 +857,7 @@ int main() {
     //test_rufs_mkdir();
     //test_rufs_open();
     //test_rufs_read_write(); 
-    test_rufs_readdir_multiple_entries();
+    //test_rufs_readdir_multiple_entries();
 
     return 0;
 }
